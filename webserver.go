@@ -2141,15 +2141,15 @@ const webUIHTML = `<!DOCTYPE html>
                             <div class="form-row-3">
                                 <div class="form-group">
                                     <label><abbr title="Defined Benefit Pension - Guaranteed pension based on salary and years of service">DB Pension</abbr> Name</label>
-                                    <input type="text" id="p2-db-name" value="Teachers Pension">
+                                    <input type="text" id="p2-db-name" value="Government Pension">
                                 </div>
                                 <div class="form-group">
                                     <label><abbr title="Defined Benefit Pension - Guaranteed pension based on salary and years of service">DB Pension</abbr> (Annual)</label>
-                                    <input type="text" id="p2-db-amount" value="5000">
+                                    <input type="text" id="p2-db-amount" value="400">
                                 </div>
                                 <div class="form-group">
                                     <label>DB Start Age</label>
-                                    <input type="number" id="p2-db-age" value="67">
+                                    <input type="number" id="p2-db-age" value="57">
                                 </div>
                             </div>
                             <div class="form-group">
@@ -2214,11 +2214,11 @@ const webUIHTML = `<!DOCTYPE html>
                             <div class="form-row">
                                 <div class="form-group">
                                     <label>Monthly (Before Age Threshold)</label>
-                                    <input type="text" id="income-before" value="6000">
+                                    <input type="text" id="income-before" value="4000">
                                 </div>
                                 <div class="form-group">
                                     <label>Monthly (After Age Threshold)</label>
-                                    <input type="text" id="income-after" value="4000">
+                                    <input type="text" id="income-after" value="2500">
                                 </div>
                             </div>
                         </div>
@@ -2226,7 +2226,7 @@ const webUIHTML = `<!DOCTYPE html>
                             <div class="form-row-3">
                                 <div class="form-group">
                                     <label>Target Depletion Age (funds run out)</label>
-                                    <input type="number" id="depletion-age" value="90">
+                                    <input type="number" id="depletion-age" value="80">
                                 </div>
                                 <div class="form-group">
                                     <label>Income Ratio Phase 1</label>
@@ -2353,7 +2353,7 @@ const webUIHTML = `<!DOCTYPE html>
                             </div>
                             <div class="form-group">
                                 <label>State Pension (Annual)</label>
-                                <input type="text" id="state-pension" value="12570">
+                                <input type="text" id="state-pension" value="12547.60">
                             </div>
                         </div>
                         <div class="form-row">
@@ -2395,7 +2395,7 @@ const webUIHTML = `<!DOCTYPE html>
                         <div class="form-row" style="margin-top: 0.5rem;">
                             <div class="form-group">
                                 <label>Early Payoff Year (all parts)</label>
-                                <input type="number" id="mortgage-early" value="2026">
+                                <input type="number" id="mortgage-early" value="2028">
                             </div>
                         </div>
                     </div>
@@ -2412,7 +2412,7 @@ const webUIHTML = `<!DOCTYPE html>
                             </div>
                             <div class="form-group">
                                 <label>Sim End Age (display to)</label>
-                                <input type="number" id="sim-end" value="95">
+                                <input type="number" id="sim-end" value="90">
                             </div>
                             <div class="form-group">
                                 <label>Simulation Reference</label>
