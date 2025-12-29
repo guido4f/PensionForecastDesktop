@@ -3637,9 +3637,27 @@ const webUIHTML = `<!DOCTYPE html>
                 csv += '\n\n';
             });
 
-            // Save CSV via server API
+            // Save CSV via server API - include parameters in filename
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const filename = 'pension-forecast-' + mode.toLowerCase().replace(/\s+/g, '-') + '-' + timestamp + '.csv';
+            const pGrowth = document.getElementById('pension-growth').value;
+            const sGrowth = document.getElementById('savings-growth').value;
+
+            // Build descriptive filename with key parameters
+            let filenameParts = ['pension', mode.toLowerCase().replace(/\s+/g, '-')];
+            filenameParts.push('p' + pGrowth + '-s' + sGrowth);
+
+            // Add mode-specific parameters
+            if (currentMode === 'depletion' || currentMode === 'pension-only' || currentMode === 'pension-to-isa') {
+                const targetAge = document.getElementById('target-depletion-age');
+                if (targetAge) filenameParts.push('age' + targetAge.value);
+            }
+            if (currentMode === 'fixed') {
+                const incomeBefore = document.getElementById('income-before');
+                if (incomeBefore) filenameParts.push('inc' + Math.round(parseFloat(incomeBefore.value) || 0));
+            }
+
+            filenameParts.push(timestamp);
+            const filename = filenameParts.join('-') + '.csv';
 
             fetch('/api/export-csv', {
                 method: 'POST',
