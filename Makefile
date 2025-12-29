@@ -2,7 +2,7 @@
 # Cross-compile for macOS (Apple Silicon), Windows, Linux
 # Supports embedded browser (-ui), web server (-web), and console-only builds
 
-BINARY_NAME=pensionForecast
+BINARY_NAME=goPensionForecast
 BUILD_DIR=build
 
 # Version management - read from VERSION file

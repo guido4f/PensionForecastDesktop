@@ -1,4 +1,4 @@
-module pensionForecast
+module goPensionForecast
 
 go 1.25
 

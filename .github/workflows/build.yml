@@ -19,7 +19,7 @@ jobs:
           go-version: '1.21'
 
       - name: Run tests
-        run: go test -v ./...
+        run: go test -tags console -v ./...
 
   build-console:
     runs-on: ubuntu-latest
@@ -102,7 +102,7 @@ jobs:
         run: |
           $env:CGO_ENABLED="1"
           New-Item -ItemType Directory -Force -Path build
-          go build -ldflags "-s -w" -o build/pensionForecast-windows-amd64-ui.exe .
+          go build -ldflags "-s -w" -o build/goPensionForecast-windows-amd64-ui.exe .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -124,11 +124,11 @@ jobs:
       - name: Build macOS UI (ARM64)
         run: |
           mkdir -p build
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o build/pensionForecast-macos-arm64-ui .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o build/goPensionForecast-macos-arm64-ui .
 
       - name: Build macOS UI (Intel)
         run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o build/pensionForecast-macos-amd64-ui .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o build/goPensionForecast-macos-amd64-ui .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
