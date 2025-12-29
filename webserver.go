@@ -555,12 +555,15 @@ func (ws *WebServer) buildConfig(req *APISimulationRequest) *Config {
 	// Debug: log TaxBandInflation value
 	log.Printf("DEBUG: TaxBandInflation = %.4f, StartYear = %d", config.Financial.TaxBandInflation, config.Simulation.StartYear)
 
-	// Set reference person if not set
-	if config.IncomeRequirements.ReferencePerson == "" && len(config.People) > 0 {
-		config.IncomeRequirements.ReferencePerson = config.People[0].Name
-	}
-	if config.Simulation.ReferencePerson == "" && len(config.People) > 0 {
-		config.Simulation.ReferencePerson = config.People[0].Name
+	// Set reference person if not set OR if it doesn't exist in People
+	// This handles the case where Simulation was copied from ws.config but People came from API request
+	if len(config.People) > 0 {
+		if config.IncomeRequirements.ReferencePerson == "" || config.FindPerson(config.IncomeRequirements.ReferencePerson) == nil {
+			config.IncomeRequirements.ReferencePerson = config.People[0].Name
+		}
+		if config.Simulation.ReferencePerson == "" || config.FindPerson(config.Simulation.ReferencePerson) == nil {
+			config.Simulation.ReferencePerson = config.People[0].Name
+		}
 	}
 
 	return config
