@@ -214,15 +214,18 @@ func (r *PDFActionPlanReport) addTitlePage() {
 	// Calculate the year when age threshold is reached
 	thresholdYear := refBirthYear + r.config.IncomeRequirements.AgeThreshold
 
+	// Get actual income (handles depletion mode where config values are 0)
+	monthlyBefore, monthlyAfter := r.getIncomeRequirements()
+
 	// Phase 1: Before age threshold
 	phase1Text := fmt.Sprintf("%s/month from 6 April %d to 5 April %d (until age %d)",
-		FormatMoneyPDF(r.config.IncomeRequirements.MonthlyBeforeAge),
+		FormatMoneyPDF(monthlyBefore),
 		startYear, thresholdYear, r.config.IncomeRequirements.AgeThreshold)
 	r.pdf.CellFormat(contentWidth, 7, phase1Text, "LR", 1, "C", true, 0, "")
 
 	// Phase 2: After age threshold
 	phase2Text := fmt.Sprintf("%s/month from 6 April %d to 5 April %d (age %d onwards)",
-		FormatMoneyPDF(r.config.IncomeRequirements.MonthlyAfterAge),
+		FormatMoneyPDF(monthlyAfter),
 		thresholdYear, endYear+1, r.config.IncomeRequirements.AgeThreshold)
 	r.pdf.CellFormat(contentWidth, 7, phase2Text, "LRB", 1, "C", true, 0, "")
 
@@ -275,16 +278,19 @@ func (r *PDFActionPlanReport) addStrategyOverview() {
 	r.pdf.CellFormat(contentWidth-35, 5, fmt.Sprintf("6 April %d to 5 April %d (%d years)",
 		startYear, endYear+1, endYear-startYear+1), "", 1, "L", false, 0, "")
 
+	// Get actual income (handles depletion mode where config values are 0)
+	monthlyBefore, monthlyAfter := r.getIncomeRequirements()
+
 	// Phase 1 income
 	r.pdf.CellFormat(35, 5, "Phase 1 Income:", "", 0, "L", false, 0, "")
 	r.pdf.CellFormat(contentWidth-35, 5, fmt.Sprintf("%s/month (6 Apr %d to 5 Apr %d, until age %d)",
-		FormatMoneyPDF(r.config.IncomeRequirements.MonthlyBeforeAge),
+		FormatMoneyPDF(monthlyBefore),
 		startYear, thresholdYear, r.config.IncomeRequirements.AgeThreshold), "", 1, "L", false, 0, "")
 
 	// Phase 2 income
 	r.pdf.CellFormat(35, 5, "Phase 2 Income:", "", 0, "L", false, 0, "")
 	r.pdf.CellFormat(contentWidth-35, 5, fmt.Sprintf("%s/month (6 Apr %d to 5 Apr %d, age %d+)",
-		FormatMoneyPDF(r.config.IncomeRequirements.MonthlyAfterAge),
+		FormatMoneyPDF(monthlyAfter),
 		thresholdYear, endYear+1, r.config.IncomeRequirements.AgeThreshold), "", 1, "L", false, 0, "")
 
 	r.pdf.Ln(5)
@@ -1255,5 +1261,72 @@ func (r *PDFActionPlanReport) getDepletionYears() (isaYear int, pensionYear int)
 		prevPensionTotal = pensionTotal
 	}
 
+	// In depletion mode, if we reached the end with very low balance, mark depletion at last year
+	if len(r.result.Years) > 0 {
+		lastYear := r.result.Years[len(r.result.Years)-1]
+		lastISA := 0.0
+		lastPension := 0.0
+		for _, bal := range lastYear.EndBalances {
+			lastISA += bal.TaxFreeSavings
+			lastPension += bal.CrystallisedPot + bal.UncrystallisedPot
+		}
+		// If balance is very low at end (near zero), mark as depleted that year
+		if isaYear == 0 && lastISA < 1000 && prevISATotal > 1000 {
+			isaYear = lastYear.Year
+		}
+		if pensionYear == 0 && lastPension < 1000 && prevPensionTotal > 1000 {
+			pensionYear = lastYear.Year
+		}
+	}
+
 	return isaYear, pensionYear
+}
+
+// getActualIncomeFromSimulation extracts actual income requirements from simulation years
+// This is needed for depletion mode where config values are 0
+func (r *PDFActionPlanReport) getActualIncomeFromSimulation() (monthlyBefore, monthlyAfter float64) {
+	if len(r.result.Years) == 0 {
+		return 0, 0
+	}
+
+	refPerson := r.config.GetReferencePerson()
+	refBirthYear := GetBirthYear(refPerson.BirthDate)
+	thresholdAge := r.config.IncomeRequirements.AgeThreshold
+
+	// Find income for phase 1 (before threshold) and phase 2 (after threshold)
+	for _, year := range r.result.Years {
+		refAge := year.Year - refBirthYear
+		if monthlyBefore == 0 && refAge < thresholdAge && year.RequiredIncome > 0 {
+			monthlyBefore = year.RequiredIncome / 12
+		}
+		if monthlyAfter == 0 && refAge >= thresholdAge && year.RequiredIncome > 0 {
+			monthlyAfter = year.RequiredIncome / 12
+		}
+		if monthlyBefore > 0 && monthlyAfter > 0 {
+			break
+		}
+	}
+
+	// If we only found one phase, use it for both
+	if monthlyBefore == 0 && monthlyAfter > 0 {
+		monthlyBefore = monthlyAfter
+	}
+	if monthlyAfter == 0 && monthlyBefore > 0 {
+		monthlyAfter = monthlyBefore
+	}
+
+	return monthlyBefore, monthlyAfter
+}
+
+// getIncomeRequirements returns the income values, using simulation data for depletion mode
+func (r *PDFActionPlanReport) getIncomeRequirements() (monthlyBefore, monthlyAfter float64) {
+	monthlyBefore = r.config.IncomeRequirements.MonthlyBeforeAge
+	monthlyAfter = r.config.IncomeRequirements.MonthlyAfterAge
+
+	// In depletion mode, config values are 0 - extract from simulation
+	if monthlyBefore == 0 && monthlyAfter == 0 {
+		monthlyBefore, monthlyAfter = r.getActualIncomeFromSimulation()
+	}
+
+	return monthlyBefore, monthlyAfter
 }
