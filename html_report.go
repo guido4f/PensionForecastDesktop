@@ -757,6 +757,10 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
         <div class="container">
             <div class="card">
                 <h2>Strategy Comparison</h2>
+                <p style="margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
+                    Compares different withdrawal strategies. <strong>PCLS</strong> (Pension Commencement Lump Sum) is the 25%% tax-free amount
+                    you can take when crystallising your pension. Click any strategy column to view details.
+                </p>
                 <table class="comparison-table">
                     <tr>
                         <th>Metric</th>
@@ -2529,7 +2533,7 @@ func generatePensionOnlyCombinedReport(results []DepletionResult, config *Config
 <div class="container"><div class="metrics"><div class="metric"><div class="metric-value">%s</div><div class="metric-label">Monthly Income (Phase 1)</div></div>
 <div class="metric"><div class="metric-value">%s</div><div class="metric-label">Monthly Income (Phase 2)</div></div>
 <div class="metric"><div class="metric-value">%s</div><div class="metric-label">ISA Preserved</div></div></div>
-<div class="card"><h2>Strategy Comparison</h2><table><thead><tr><th>Strategy</th><th>Monthly (Before)</th><th>Monthly (After)</th><th>Annual</th><th>Total Tax</th><th>Final ISA</th></tr></thead><tbody>
+<div class="card"><h2>Strategy Comparison</h2><p style="margin-bottom:1rem;color:#64748b;font-size:.9rem"><strong>PCLS</strong> (Pension Commencement Lump Sum) is the 25%% tax-free amount you can take when crystallising your pension.</p><table><thead><tr><th>Strategy</th><th>Monthly (Before)</th><th>Monthly (After)</th><th>Annual</th><th>Total Tax</th><th>Final ISA</th></tr></thead><tbody>
 `, ic.TargetDepletionAge, refPerson.Name, FormatMoney(results[bestIdx].MonthlyBeforeAge), FormatMoney(results[bestIdx].MonthlyAfterAge), FormatMoney(finalISA))
 	for i, r := range results {
 		rowClass := ""
@@ -2593,7 +2597,7 @@ func generatePensionToISACombinedReport(results []DepletionResult, config *Confi
 <div class="container"><div class="metrics"><div class="metric"><div class="metric-value">%s</div><div class="metric-label">Monthly Income (Phase 1)</div></div>
 <div class="metric"><div class="metric-value">%s</div><div class="metric-label">Monthly Income (Phase 2)</div></div>
 <div class="metric"><div class="metric-value">%s</div><div class="metric-label">Final ISA (after transfers)</div></div></div>
-<div class="card"><h2>Strategy Comparison</h2><table><thead><tr><th>Strategy</th><th>Monthly (Before)</th><th>Monthly (After)</th><th>Annual</th><th>Total Tax</th><th>Final ISA</th></tr></thead><tbody>
+<div class="card"><h2>Strategy Comparison</h2><p style="margin-bottom:1rem;color:#64748b;font-size:.9rem"><strong>PCLS</strong> (Pension Commencement Lump Sum) is the 25%% tax-free amount you can take when crystallising your pension.</p><table><thead><tr><th>Strategy</th><th>Monthly (Before)</th><th>Monthly (After)</th><th>Annual</th><th>Total Tax</th><th>Final ISA</th></tr></thead><tbody>
 `, ic.TargetDepletionAge, refPerson.Name, FormatMoney(results[bestIdx].MonthlyBeforeAge), FormatMoney(results[bestIdx].MonthlyAfterAge), FormatMoney(finalISA))
 	for i, r := range results {
 		rowClass := ""
