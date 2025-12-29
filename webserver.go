@@ -9,6 +9,10 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -117,6 +121,8 @@ func (ws *WebServer) Start() error {
 	mux.HandleFunc("/api/simulate/pension-only", ws.handleSimulatePensionOnly)
 	mux.HandleFunc("/api/simulate/pension-to-isa", ws.handleSimulatePensionToISA)
 	mux.HandleFunc("/api/simulate/sensitivity", ws.handleSensitivityGrid)
+	mux.HandleFunc("/api/export-csv", ws.handleExportCSV)
+	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
 
 	// Listen on the address (use :0 for auto-assign)
 	listener, err := net.Listen("tcp", ws.addr)
@@ -158,6 +164,8 @@ func (ws *WebServer) StartForEmbedded() (url string, cleanup func(), err error) 
 	mux.HandleFunc("/api/simulate/pension-only", ws.handleSimulatePensionOnly)
 	mux.HandleFunc("/api/simulate/pension-to-isa", ws.handleSimulatePensionToISA)
 	mux.HandleFunc("/api/simulate/sensitivity", ws.handleSensitivityGrid)
+	mux.HandleFunc("/api/export-csv", ws.handleExportCSV)
+	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
 
 	// Listen on the address (use :0 for auto-assign)
 	listener, err := net.Listen("tcp", ws.addr)
@@ -567,6 +575,130 @@ func (ws *WebServer) buildConfig(req *APISimulationRequest) *Config {
 	}
 
 	return config
+}
+
+// CSVExportRequest represents a request to export CSV
+type CSVExportRequest struct {
+	Content  string `json:"content"`
+	Filename string `json:"filename"`
+}
+
+// CSVExportResponse represents the response from CSV export
+type CSVExportResponse struct {
+	Success  bool   `json:"success"`
+	FilePath string `json:"file_path"`
+	Message  string `json:"message"`
+}
+
+// handleExportCSV saves CSV content to a file and returns the path
+func (ws *WebServer) handleExportCSV(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req CSVExportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CSVExportResponse{
+			Success: false,
+			Message: "Invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Create exports directory if it doesn't exist
+	exportDir := "exports"
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CSVExportResponse{
+			Success: false,
+			Message: "Failed to create exports directory: " + err.Error(),
+		})
+		return
+	}
+
+	// Generate filename if not provided
+	filename := req.Filename
+	if filename == "" {
+		filename = fmt.Sprintf("pension-forecast-%s.csv", time.Now().Format("2006-01-02-150405"))
+	}
+
+	// Full path for the file
+	filePath := filepath.Join(exportDir, filename)
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		absPath = filePath
+	}
+
+	// Write the file
+	if err := os.WriteFile(filePath, []byte(req.Content), 0644); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CSVExportResponse{
+			Success: false,
+			Message: "Failed to write file: " + err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(CSVExportResponse{
+		Success:  true,
+		FilePath: absPath,
+		Message:  fmt.Sprintf("CSV saved to %s", absPath),
+	})
+}
+
+// OpenFolderRequest represents a request to open a folder
+type OpenFolderRequest struct {
+	FilePath string `json:"file_path"`
+}
+
+// handleOpenFolder opens the folder containing the specified file in the system file browser
+func (ws *WebServer) handleOpenFolder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req OpenFolderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Get the directory containing the file
+	dir := filepath.Dir(req.FilePath)
+
+	// Open in system file browser based on OS
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", dir)
+	case "windows":
+		cmd = exec.Command("explorer", dir)
+	default: // Linux and others
+		cmd = exec.Command("xdg-open", dir)
+	}
+
+	if err := cmd.Start(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to open folder: " + err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Folder opened",
+	})
 }
 
 // runFixedSimulation runs fixed income mode
@@ -3505,15 +3637,76 @@ const webUIHTML = `<!DOCTYPE html>
                 csv += '\n\n';
             });
 
-            // Create and download file
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            const timestamp = new Date().toISOString().slice(0, 10);
-            link.href = URL.createObjectURL(blob);
-            link.download = 'pension-forecast-' + mode.toLowerCase().replace(/\s+/g, '-') + '-' + timestamp + '.csv';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
+            // Save CSV via server API
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const filename = 'pension-forecast-' + mode.toLowerCase().replace(/\s+/g, '-') + '-' + timestamp + '.csv';
+
+            fetch('/api/export-csv', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: csv, filename: filename })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    showExportNotification(data.file_path);
+                } else {
+                    alert('Export failed: ' + data.message);
+                }
+            })
+            .catch(err => {
+                alert('Export failed: ' + err.message);
+            });
+        }
+
+        // Show notification with file path and open folder button
+        let lastExportPath = '';
+        function showExportNotification(filePath) {
+            lastExportPath = filePath;
+
+            // Remove existing notification if any
+            const existing = document.getElementById('export-notification');
+            if (existing) existing.remove();
+
+            const notification = document.createElement('div');
+            notification.id = 'export-notification';
+            notification.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#065f46;color:white;padding:16px 20px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:10000;max-width:500px;font-size:14px;';
+            notification.innerHTML = '<div style="display:flex;align-items:flex-start;gap:12px;">' +
+                '<div style="flex:1;">' +
+                '<div style="font-weight:600;margin-bottom:4px;">CSV Exported Successfully</div>' +
+                '<div style="font-size:12px;opacity:0.9;word-break:break-all;">' + filePath + '</div>' +
+                '</div>' +
+                '<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:white;font-size:18px;cursor:pointer;padding:0;line-height:1;">&times;</button>' +
+                '</div>' +
+                '<div style="margin-top:12px;display:flex;gap:8px;">' +
+                '<button onclick="openExportFolder()" style="background:white;color:#065f46;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:500;">Open Folder</button>' +
+                '<button onclick="this.parentElement.parentElement.remove()" style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.5);padding:8px 16px;border-radius:4px;cursor:pointer;">Dismiss</button>' +
+                '</div>';
+            document.body.appendChild(notification);
+
+            // Auto-dismiss after 15 seconds
+            setTimeout(() => {
+                const notif = document.getElementById('export-notification');
+                if (notif) notif.remove();
+            }, 15000);
+        }
+
+        function openExportFolder() {
+            if (!lastExportPath) return;
+            fetch('/api/open-folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_path: lastExportPath })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (!data.success) {
+                    alert('Could not open folder: ' + data.message);
+                }
+            })
+            .catch(err => {
+                alert('Could not open folder: ' + err.message);
+            });
         }
 
         // Helper to escape CSV values
