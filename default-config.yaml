@@ -1,0 +1,187 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# PENSION FORECAST CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This simulator helps optimize pension drawdown strategies for tax efficiency.
+# It compares 8 different strategy combinations and identifies the best approach.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# TWO OPERATING MODES
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# 1. FIXED INCOME MODE (default)
+#    ────────────────────────────
+#    You specify: How much monthly income you need
+#    Simulator shows: How long your funds will last, total tax paid
+#    Best for: "Can I afford £5,000/month in retirement?"
+#
+#    Key settings:
+#      income_requirements.monthly_before_age: Income needed before age threshold
+#      income_requirements.monthly_after_age: Income needed after age threshold
+#
+#    Run with: ./goPensionForecast or ./goPensionForecast -html
+#
+# 2. DEPLETION MODE (-depletion flag)
+#    ─────────────────────────────────
+#    You specify: Target age to deplete funds by
+#    Simulator shows: Maximum sustainable income that depletes funds at target age
+#    Best for: "How much can I spend if I want funds to last until age 80?"
+#
+#    Key settings:
+#      income_requirements.target_depletion_age: Age when funds should reach zero
+#      income_requirements.income_ratio_phase1: Income ratio before threshold (e.g., 5)
+#      income_requirements.income_ratio_phase2: Income ratio after threshold (e.g., 3)
+#
+#    The ratio controls relative income in each phase. A 5:3 ratio means:
+#    - Phase 1 income (before age threshold) = multiplier × 5
+#    - Phase 2 income (after age threshold) = multiplier × 3
+#    The simulator finds the optimal multiplier that depletes funds at target age.
+#
+#    Run with: ./goPensionForecast -depletion or ./goPensionForecast -depletion -html
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# SENSITIVITY ANALYSIS (-sensitivity flag)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Runs simulations across a range of growth rates to show how results change
+# under different market conditions. Creates a matrix showing:
+# - Fixed mode: Which strategy is best at each growth rate combination
+# - Depletion mode: Maximum sustainable income at each growth rate combination
+#
+# Key settings (in sensitivity section):
+#   pension_growth_min/max: Range of pension growth rates to test
+#   savings_growth_min/max: Range of ISA growth rates to test
+#   step_size: Increment between test points (e.g., 0.01 = 1%)
+#
+# Run with: ./goPensionForecast -sensitivity or ./goPensionForecast -depletion -sensitivity
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# STRATEGIES COMPARED
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# The simulator compares 8 combinations (4 strategies × 2 mortgage options):
+#
+# Drawdown Strategies:
+#   ISA-First (ISA→Pen): Withdraw from ISA/savings first, then pension
+#   Pension-First (Pen→ISA): Withdraw from pension first, then ISA
+#   Tax-Optimized (TaxOpt): Dynamically choose source to minimize tax
+#   Pension-to-ISA (Pen+ISA): Take pension and deposit excess to ISA
+#
+# Mortgage Options:
+#   Early Payoff: Pay off mortgage as early as possible
+#   Normal Payoff: Keep mortgage until natural end date
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# CONFIGURATION SECTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PEOPLE - Define household members
+# ─────────────────────────────────────────────────────────────────────────────
+people:
+  - name: "Person1"
+    birth_date: "1970-12-15"       # YYYY-MM-DD format
+    retirement_age: 55             # Age when pension can be accessed
+    state_pension_age: 67          # Age when state pension starts
+    tax_free_savings: 100000.00    # ISA/savings balance (£)
+    pension: 500000.00             # Pension pot value (£)
+    isa_annual_limit: 20000.00     # Max annual ISA contribution (£)
+
+  - name: "Person2"
+    birth_date: "1975-01-13"
+    retirement_age: 57
+    state_pension_age: 67
+    tax_free_savings: 100000.00
+    pension: 500000.00
+    isa_annual_limit: 20000.00     # Max annual ISA contribution (£)
+    # Optional: Defined Benefit pension (e.g., Teachers, NHS, Civil Service)
+    db_pension_amount: 5000.00     # Annual DB pension amount (£)
+    db_pension_start_age: 67       # Age when DB pension starts
+    db_pension_name: "Teachers Pension"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FINANCIAL - Growth rates and fixed income sources
+# ─────────────────────────────────────────────────────────────────────────────
+financial:
+  pension_growth_rate: 5%          # Annual pension pot growth (after fees)
+  savings_growth_rate: 5%          # Annual ISA/savings growth
+  income_inflation_rate: 3%        # Annual increase in income needs
+  state_pension_amount: 12547.60   # Current full state pension (£/year/person)
+  state_pension_inflation: 3%      # Annual state pension increase
+  tax_band_inflation: 3%           # Tax band adjustment (0% = frozen bands)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INCOME REQUIREMENTS - What you need to withdraw
+# ─────────────────────────────────────────────────────────────────────────────
+income_requirements:
+  # ═══ FIXED INCOME MODE SETTINGS ═══
+  monthly_before_age: 4000.00      # Monthly income before age threshold (£)
+  monthly_after_age: 2500.00       # Monthly income at/after age threshold (£)
+
+  # ═══ DEPLETION MODE SETTINGS ═══
+target_depletion_age: 80         # Age to deplete funds by (use with -depletion)
+  income_ratio_phase1: 5.0         # Income ratio before threshold (e.g., 5 in 5:3)
+  income_ratio_phase2: 3.0         # Income ratio after threshold (e.g., 3 in 5:3)
+
+  # ═══ COMMON SETTINGS ═══
+  age_threshold: 67                # Age when income requirement changes
+  reference_person: "Person1"      # Whose age determines the threshold
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MORTGAGE - Outstanding mortgage details
+# ─────────────────────────────────────────────────────────────────────────────
+mortgage:
+  end_year: 2031                   # Year all mortgages naturally end
+  early_payoff_year: 2028          # Earliest year for early payoff (lock-in period)
+  parts:
+    - name: "Repayment"
+      principal: 20000.00          # Outstanding balance (£)
+      interest_rate: 3.89%         # Annual interest rate
+      is_repayment: true           # true = repayment, false = interest-only
+      term_years: 6                # Years remaining
+      start_year: 2025             # Year mortgage started/renewed
+    - name: "Interest Only"
+      principal: 200000.00
+      interest_rate: 4.14%
+      is_repayment: false          # Interest-only: principal due at end
+      term_years: 0                # N/A for interest-only
+      start_year: 2025
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SIMULATION - Time period settings
+# ─────────────────────────────────────────────────────────────────────────────
+simulation:
+  start_year: 2026                 # Year to start simulation
+  end_age: 90                      # Age to end simulation (reference person)
+  reference_person: "Person1"      # Whose age to use for end calculation
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SENSITIVITY - Settings for sensitivity analysis (-sensitivity flag)
+# ─────────────────────────────────────────────────────────────────────────────
+sensitivity:
+  pension_growth_min: 4%           # Minimum pension growth rate to test
+  pension_growth_max: 12%          # Maximum pension growth rate to test
+  savings_growth_min: 4%           # Minimum ISA growth rate to test
+  savings_growth_max: 12%          # Maximum ISA growth rate to test
+  step_size: 0.01                  # Step between rates (0.01 = 1%)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAX BANDS - UK income tax bands (update if rates change)
+# ─────────────────────────────────────────────────────────────────────────────
+tax_bands:
+  - name: "Personal Allowance"
+    lower: 0
+    upper: 12570
+    rate: 0.00
+  - name: "Basic Rate"
+    lower: 12570
+    upper: 50270
+    rate: 0.20
+  - name: "Higher Rate"
+    lower: 50270
+    upper: 125140
+    rate: 0.40
+  - name: "Additional Rate"
+    lower: 125140
+    upper: 10000000
+    rate: 0.45

@@ -1,0 +1,152 @@
+# Pension Forecast Configuration
+# Generated interactively - feel free to edit manually
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# TWO OPERATING MODES
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# FIXED INCOME MODE (default):
+#   You specify monthly income needs, simulator shows how long funds last.
+#   Key settings:
+#     income_requirements.monthly_before_age: £/month before age threshold
+#     income_requirements.monthly_after_age:  £/month after age threshold
+#   Question answered: "Can I afford £X/month? How long will funds last?"
+#
+# DEPLETION MODE (-depletion flag):
+#   You specify target age, simulator calculates maximum sustainable income.
+#   Key settings:
+#     income_requirements.target_depletion_age: Age to deplete funds by
+#     income_requirements.income_ratio_phase1:  Ratio before threshold (e.g., 5)
+#     income_requirements.income_ratio_phase2:  Ratio after threshold (e.g., 3)
+#   Question answered: "How much can I spend to last until age X?"
+#   Note: Ratio 5:3 means income before threshold is 5/3 times income after.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# VALUE FORMATS
+# ═══════════════════════════════════════════════════════════════════════════════
+#   Percentages: 0.05 = 5% (enter as decimal)
+#   Money: values are in GBP (e.g., 500000 = £500k)
+#   Dates: YYYY-MM-DD format (e.g., 1975-06-15)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUN COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════════
+#   ./goPensionForecast                       Interactive mode selector
+#   ./goPensionForecast -html                 Fixed income mode with HTML reports
+#   ./goPensionForecast -depletion            Depletion mode (console)
+#   ./goPensionForecast -depletion -html      Depletion mode with HTML reports
+#   ./goPensionForecast -sensitivity          Fixed income sensitivity analysis
+#   ./goPensionForecast -depletion -sensitivity  Depletion sensitivity analysis
+#   ./goPensionForecast -help                 Show all options
+#
+# See default-config.yaml for all available options with detailed comments.
+
+people:
+    - name: Person1
+      birth_date: "1970-12-15"
+      retirement_age: 55
+      state_pension_age: 67
+      tax_free_savings: 100000
+      pension: 900000
+      isa_annual_limit: 20000
+      db_pension_amount: 0
+      db_pension_start_age: 67
+      db_pension_name: ""
+      db_pension_normal_age: 65
+      db_pension_early_factor: 0.04
+      db_pension_late_factor: 0.05
+      db_pension_commutation: 0
+      db_pension_commute_factor: 12
+      state_pension_defer_years: 0
+      part_time_income: 0
+      part_time_start_age: 55
+      part_time_end_age: 60
+    - name: Person2
+      birth_date: "1975-01-13"
+      retirement_age: 57
+      state_pension_age: 67
+      tax_free_savings: 300000
+      pension: 75000
+      isa_annual_limit: 20000
+      db_pension_amount: 5000
+      db_pension_start_age: 67
+      db_pension_name: Teachers Pension
+      db_pension_normal_age: 65
+      db_pension_early_factor: 0.04
+      db_pension_late_factor: 0.05
+      db_pension_commutation: 0
+      db_pension_commute_factor: 12
+      state_pension_defer_years: 0
+      part_time_income: 0
+      part_time_start_age: 55
+      part_time_end_age: 60
+financial:
+    pension_growth_rate: 0.08
+    savings_growth_rate: 0.08
+    income_inflation_rate: 0.03
+    state_pension_amount: 12570
+    state_pension_inflation: 0.03
+    tax_band_inflation: 0.03
+    state_pension_deferral_rate: 0
+    emergency_fund_months: 0
+    emergency_fund_inflation_adjust: false
+income_requirements:
+    monthly_before_age: 7000
+    monthly_after_age: 4000
+    target_depletion_age: 0
+    income_ratio_phase1: 0
+    income_ratio_phase2: 0
+    guardrails_enabled: false
+    guardrails_upper_limit: 1.2
+    guardrails_lower_limit: 0.8
+    guardrails_adjustment: 0.1
+    vpw_enabled: false
+    vpw_floor: 0
+    vpw_ceiling: 0
+    age_threshold: 67
+    reference_person: Person1
+mortgage:
+    parts:
+        - name: House
+          principal: 281000
+          interest_rate: 0.0414
+          is_repayment: false
+          term_years: 25
+          start_year: 2006
+        - name: Boat
+          principal: 45000
+          interest_rate: 0.038900000000000004
+          is_repayment: true
+          term_years: 6
+          start_year: 2026
+    end_year: 2032
+    early_payoff_year: 2026
+simulation:
+    start_year: 2026
+    end_age: 95
+    reference_person: Person1
+sensitivity:
+    pension_growth_min: 0.04
+    pension_growth_max: 0.12
+    savings_growth_min: 0.04
+    savings_growth_max: 0.12
+    step_size: 0.01
+strategy:
+    maximize_couple_isa: null
+tax_bands:
+    - name: Personal Allowance
+      lower: 0
+      upper: 12570
+      rate: 0
+    - name: Basic Rate
+      lower: 12570
+      upper: 50270
+      rate: 0.2
+    - name: Higher Rate
+      lower: 50270
+      upper: 125140
+      rate: 0.4
+    - name: Additional Rate
+      lower: 125140
+      upper: 1e+07
+      rate: 0.45

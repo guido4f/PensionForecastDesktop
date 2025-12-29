@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background: Stylized £10 note -->
+  <defs>
+    <linearGradient id="noteGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4A574"/>
+      <stop offset="50%" style="stop-color:#C4956A"/>
+      <stop offset="100%" style="stop-color:#B08050"/>
+    </linearGradient>
+    <linearGradient id="noteShine" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#E8C8A0;stop-opacity:0.3"/>
+      <stop offset="50%" style="stop-color:#FFFFFF;stop-opacity:0.1"/>
+      <stop offset="100%" style="stop-color:#E8C8A0;stop-opacity:0.3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- £10 Note background (rotated slightly) -->
+  <g transform="rotate(-8, 256, 256)">
+    <!-- Note base -->
+    <rect x="56" y="120" width="400" height="200" rx="8" fill="url(#noteGradient)" stroke="#8B6914" stroke-width="3"/>
+
+    <!-- Note pattern lines -->
+    <rect x="56" y="120" width="400" height="200" rx="8" fill="url(#noteShine)"/>
+
+    <!-- Decorative border -->
+    <rect x="70" y="134" width="372" height="172" rx="4" fill="none" stroke="#8B6914" stroke-width="1" stroke-dasharray="4,2"/>
+
+    <!-- £10 text -->
+    <text x="120" y="185" font-family="Georgia, serif" font-size="48" font-weight="bold" fill="#4A3728">£10</text>
+
+    <!-- Decorative circles (like on real notes) -->
+    <circle cx="400" cy="180" r="35" fill="none" stroke="#8B6914" stroke-width="1" opacity="0.5"/>
+    <circle cx="400" cy="180" r="28" fill="none" stroke="#8B6914" stroke-width="1" opacity="0.4"/>
+    <circle cx="400" cy="180" r="21" fill="none" stroke="#8B6914" stroke-width="1" opacity="0.3"/>
+
+    <!-- Bank of England text suggestion -->
+    <text x="280" y="290" font-family="Arial, sans-serif" font-size="12" fill="#6B5344" opacity="0.7">BANK OF ENGLAND</text>
+  </g>
+
+  <!-- UK Warning Sign: Elderly People -->
+  <g transform="translate(256, 300)">
+    <!-- Triangle background (white) -->
+    <polygon points="0,-140 121,70 -121,70" fill="white" stroke="#CC0000" stroke-width="16" stroke-linejoin="round"/>
+
+    <!-- Inner triangle border -->
+    <polygon points="0,-115 98,55 -98,55" fill="none" stroke="#CC0000" stroke-width="2"/>
+
+    <!-- Elderly couple silhouette -->
+    <g transform="translate(0, -15)" fill="#1a1a1a">
+      <!-- Person with walking stick (left) -->
+      <!-- Head -->
+      <circle cx="-28" cy="-45" r="14"/>
+      <!-- Body hunched -->
+      <path d="M-28,-30 Q-35,-10 -40,25 L-32,25 Q-30,0 -28,-15 Q-26,0 -24,25 L-16,25 Q-21,-10 -28,-30" />
+      <!-- Walking stick -->
+      <line x1="-45" y1="-5" x2="-50" y2="45" stroke="#1a1a1a" stroke-width="4" stroke-linecap="round"/>
+
+      <!-- Person without stick (right) -->
+      <!-- Head -->
+      <circle cx="28" cy="-45" r="14"/>
+      <!-- Body hunched -->
+      <path d="M28,-30 Q21,-10 16,25 L24,25 Q26,0 28,-15 Q30,0 32,25 L40,25 Q35,-10 28,-30" />
+    </g>
+  </g>
+
+  <!-- Pound symbol accent -->
+  <text x="420" y="100" font-family="Georgia, serif" font-size="60" font-weight="bold" fill="#2E7D32" opacity="0.8">£</text>
+</svg>

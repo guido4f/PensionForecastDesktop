@@ -1,0 +1,536 @@
+package main
+
+import (
+	_ "embed"
+	"math"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+//go:embed default-config.yaml
+var defaultConfigYAML string
+
+// PersonConfig represents a person's configuration from YAML
+type PersonConfig struct {
+	Name            string  `yaml:"name" json:"name"`
+	BirthDate       string  `yaml:"birth_date" json:"birth_date"`
+	RetirementAge   int     `yaml:"retirement_age" json:"retirement_age"`
+	StatePensionAge int     `yaml:"state_pension_age" json:"state_pension_age"`
+	TaxFreeSavings  float64 `yaml:"tax_free_savings" json:"tax_free_savings"`
+	Pension         float64 `yaml:"pension" json:"pension"`
+	ISAAnnualLimit  float64 `yaml:"isa_annual_limit" json:"isa_annual_limit"` // Per-person ISA annual limit (default 20000)
+
+	// DB Pension Configuration
+	DBPensionAmount        float64 `yaml:"db_pension_amount" json:"db_pension_amount"`                 // Annual DB pension at normal retirement age
+	DBPensionStartAge      int     `yaml:"db_pension_start_age" json:"db_pension_start_age"`           // Age when DB pension starts (can differ from normal retirement age)
+	DBPensionName          string  `yaml:"db_pension_name" json:"db_pension_name"`                     // Name of DB pension scheme
+	DBPensionNormalAge     int     `yaml:"db_pension_normal_age" json:"db_pension_normal_age"`         // Normal retirement age for the scheme
+	DBPensionEarlyFactor   float64 `yaml:"db_pension_early_factor" json:"db_pension_early_factor"`     // Reduction per year early (e.g., 0.04 = 4% per year)
+	DBPensionLateFactor    float64 `yaml:"db_pension_late_factor" json:"db_pension_late_factor"`       // Increase per year late (e.g., 0.05 = 5% per year)
+	DBPensionCommutation   float64 `yaml:"db_pension_commutation" json:"db_pension_commutation"`       // Fraction to commute (0-0.25, e.g., 0.25 = take 25% as lump sum)
+	DBPensionCommuteFactor float64 `yaml:"db_pension_commute_factor" json:"db_pension_commute_factor"` // Commutation factor (e.g., 12 = £12 lump sum per £1 pension given up)
+
+	// State Pension Deferral
+	StatePensionDeferYears int `yaml:"state_pension_defer_years" json:"state_pension_defer_years"` // Years to defer state pension (0 = no deferral)
+
+	// Phased Retirement (Part-time work)
+	PartTimeIncome   float64 `yaml:"part_time_income" json:"part_time_income"`       // Annual income from part-time work
+	PartTimeStartAge int     `yaml:"part_time_start_age" json:"part_time_start_age"` // Age when part-time work starts
+	PartTimeEndAge   int     `yaml:"part_time_end_age" json:"part_time_end_age"`     // Age when part-time work ends
+}
+
+// FinancialConfig holds growth and inflation rates
+type FinancialConfig struct {
+	PensionGrowthRate        float64 `yaml:"pension_growth_rate" json:"pension_growth_rate"`
+	SavingsGrowthRate        float64 `yaml:"savings_growth_rate" json:"savings_growth_rate"`
+	IncomeInflationRate      float64 `yaml:"income_inflation_rate" json:"income_inflation_rate"`
+	StatePensionAmount       float64 `yaml:"state_pension_amount" json:"state_pension_amount"`
+	StatePensionInflation    float64 `yaml:"state_pension_inflation" json:"state_pension_inflation"`
+	TaxBandInflation         float64 `yaml:"tax_band_inflation" json:"tax_band_inflation"`                   // Annual inflation rate for tax bands
+	StatePensionDeferralRate float64 `yaml:"state_pension_deferral_rate" json:"state_pension_deferral_rate"` // Enhancement per year deferred (default 5.8% = 0.058)
+	// Emergency Fund Preservation
+	EmergencyFundMonths          int  `yaml:"emergency_fund_months" json:"emergency_fund_months"`                     // Minimum months of expenses to keep in ISA (0 = no minimum)
+	EmergencyFundInflationAdjust bool `yaml:"emergency_fund_inflation_adjust" json:"emergency_fund_inflation_adjust"` // Grow threshold with inflation
+}
+
+// IncomeConfig holds income requirement settings
+type IncomeConfig struct {
+	// Fixed income mode (used when TargetDepletionAge is 0)
+	MonthlyBeforeAge float64 `yaml:"monthly_before_age" json:"monthly_before_age"`
+	MonthlyAfterAge  float64 `yaml:"monthly_after_age" json:"monthly_after_age"`
+
+	// Depletion mode (used when TargetDepletionAge > 0)
+	TargetDepletionAge int     `yaml:"target_depletion_age" json:"target_depletion_age"` // If > 0, calculate income to deplete at this age
+	IncomeRatioPhase1  float64 `yaml:"income_ratio_phase1" json:"income_ratio_phase1"`   // e.g., 5.0 for 5:3 ratio
+	IncomeRatioPhase2  float64 `yaml:"income_ratio_phase2" json:"income_ratio_phase2"`   // e.g., 3.0 for 5:3 ratio
+
+	// Guardrails Strategy (Guyton-Klinger) - dynamic withdrawal adjustments
+	GuardrailsEnabled    bool    `yaml:"guardrails_enabled" json:"guardrails_enabled"`         // Enable guardrails adjustments
+	GuardrailsUpperLimit float64 `yaml:"guardrails_upper_limit" json:"guardrails_upper_limit"` // Upper guardrail (e.g., 1.20 = 120% of initial rate)
+	GuardrailsLowerLimit float64 `yaml:"guardrails_lower_limit" json:"guardrails_lower_limit"` // Lower guardrail (e.g., 0.80 = 80% of initial rate)
+	GuardrailsAdjustment float64 `yaml:"guardrails_adjustment" json:"guardrails_adjustment"`   // Adjustment percentage (e.g., 0.10 = 10%)
+
+	// VPW (Variable Percentage Withdrawal) Strategy
+	VPWEnabled bool    `yaml:"vpw_enabled" json:"vpw_enabled"` // Enable VPW-based income calculation
+	VPWFloor   float64 `yaml:"vpw_floor" json:"vpw_floor"`     // Minimum annual withdrawal (optional floor)
+	VPWCeiling float64 `yaml:"vpw_ceiling" json:"vpw_ceiling"` // Maximum as multiple of floor (e.g., 1.5 = 150%)
+
+	// Common fields
+	AgeThreshold    int    `yaml:"age_threshold" json:"age_threshold"`
+	ReferencePerson string `yaml:"reference_person" json:"reference_person"`
+}
+
+// IsDepletionMode returns true if depletion mode is configured
+func (ic *IncomeConfig) IsDepletionMode() bool {
+	return ic.TargetDepletionAge > 0
+}
+
+// GetIncomeAmounts returns monthly income amounts for a given multiplier
+// In fixed mode, multiplier is ignored and fixed amounts are returned
+// In depletion mode, returns amounts based on ratios and multiplier
+func (ic *IncomeConfig) GetIncomeAmounts(multiplier float64) (beforeAge, afterAge float64) {
+	if !ic.IsDepletionMode() {
+		return ic.MonthlyBeforeAge, ic.MonthlyAfterAge
+	}
+	return ic.IncomeRatioPhase1 * multiplier, ic.IncomeRatioPhase2 * multiplier
+}
+
+// MortgagePartConfig holds details for one mortgage part
+type MortgagePartConfig struct {
+	Name         string  `yaml:"name" json:"name"`                   // e.g., "Repayment" or "Interest Only"
+	Principal    float64 `yaml:"principal" json:"principal"`         // Original loan amount
+	InterestRate float64 `yaml:"interest_rate" json:"interest_rate"` // Annual interest rate (e.g., 0.0389 = 3.89%)
+	IsRepayment  bool    `yaml:"is_repayment" json:"is_repayment"`   // true = repayment, false = interest-only
+	TermYears    int     `yaml:"term_years" json:"term_years"`       // Term in years (for repayment mortgages)
+	StartYear    int     `yaml:"start_year" json:"start_year"`       // Year mortgage started (to calculate remaining balance)
+}
+
+// MortgageConfig holds mortgage details
+type MortgageConfig struct {
+	Parts           []MortgagePartConfig `yaml:"parts" json:"parts"`                         // Individual mortgage parts
+	EndYear         int                  `yaml:"end_year" json:"end_year"`                   // Year all mortgages end (for normal payoff scenario)
+	EarlyPayoffYear int                  `yaml:"early_payoff_year" json:"early_payoff_year"` // Year when early payoff can happen (if tied in)
+}
+
+// SimulationConfig holds simulation parameters
+type SimulationConfig struct {
+	StartYear       int    `yaml:"start_year" json:"start_year"`
+	EndAge          int    `yaml:"end_age" json:"end_age"`
+	ReferencePerson string `yaml:"reference_person" json:"reference_person"`
+}
+
+// SensitivityConfig holds sensitivity analysis parameters
+type SensitivityConfig struct {
+	PensionGrowthMin float64 `yaml:"pension_growth_min" json:"pension_growth_min"` // Min pension growth rate (e.g., 0.04 = 4%)
+	PensionGrowthMax float64 `yaml:"pension_growth_max" json:"pension_growth_max"` // Max pension growth rate (e.g., 0.12 = 12%)
+	SavingsGrowthMin float64 `yaml:"savings_growth_min" json:"savings_growth_min"` // Min savings growth rate
+	SavingsGrowthMax float64 `yaml:"savings_growth_max" json:"savings_growth_max"` // Max savings growth rate
+	StepSize         float64 `yaml:"step_size" json:"step_size"`                   // Step size (e.g., 0.01 = 1%)
+}
+
+// StrategyConfig holds strategy-specific options
+type StrategyConfig struct {
+	// MaximizeCoupleISA allows one person's pension to over-withdraw to fill both
+	// people's ISA allowances, even if the second person can't access their pension yet.
+	// This is beneficial for couples where one retires earlier. Default: true
+	MaximizeCoupleISA *bool `yaml:"maximize_couple_isa" json:"maximize_couple_isa"`
+}
+
+// ShouldMaximizeCoupleISA returns whether to maximize ISA transfers for couples (default: true)
+func (s *StrategyConfig) ShouldMaximizeCoupleISA() bool {
+	if s.MaximizeCoupleISA == nil {
+		return true // default to true
+	}
+	return *s.MaximizeCoupleISA
+}
+
+// TaxBand represents a tax band from configuration
+type TaxBand struct {
+	Name  string  `yaml:"name" json:"name"`
+	Lower float64 `yaml:"lower" json:"lower"`
+	Upper float64 `yaml:"upper" json:"upper"`
+	Rate  float64 `yaml:"rate" json:"rate"`
+}
+
+// Config holds the complete configuration
+type Config struct {
+	People             []PersonConfig    `yaml:"people" json:"people"`
+	Financial          FinancialConfig   `yaml:"financial" json:"financial"`
+	IncomeRequirements IncomeConfig      `yaml:"income_requirements" json:"income_requirements"`
+	Mortgage           MortgageConfig    `yaml:"mortgage" json:"mortgage"`
+	Simulation         SimulationConfig  `yaml:"simulation" json:"simulation"`
+	Sensitivity        SensitivityConfig `yaml:"sensitivity" json:"sensitivity"`
+	Strategy           StrategyConfig    `yaml:"strategy" json:"strategy"`
+	TaxBands           []TaxBand         `yaml:"tax_bands" json:"tax_bands"`
+}
+
+// LoadConfig loads configuration from a YAML file
+func LoadConfig(filename string) (*Config, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	var config Config
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
+// SaveConfig saves configuration to a YAML file
+func SaveConfig(config *Config, filename string) error {
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return err
+	}
+
+	// Add a header comment with instructions
+	header := []byte(`# Pension Forecast Configuration
+# Generated interactively - feel free to edit manually
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# TWO OPERATING MODES
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# FIXED INCOME MODE (default):
+#   You specify monthly income needs, simulator shows how long funds last.
+#   Key settings:
+#     income_requirements.monthly_before_age: £/month before age threshold
+#     income_requirements.monthly_after_age:  £/month after age threshold
+#   Question answered: "Can I afford £X/month? How long will funds last?"
+#
+# DEPLETION MODE (-depletion flag):
+#   You specify target age, simulator calculates maximum sustainable income.
+#   Key settings:
+#     income_requirements.target_depletion_age: Age to deplete funds by
+#     income_requirements.income_ratio_phase1:  Ratio before threshold (e.g., 5)
+#     income_requirements.income_ratio_phase2:  Ratio after threshold (e.g., 3)
+#   Question answered: "How much can I spend to last until age X?"
+#   Note: Ratio 5:3 means income before threshold is 5/3 times income after.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# VALUE FORMATS
+# ═══════════════════════════════════════════════════════════════════════════════
+#   Percentages: 0.05 = 5% (enter as decimal)
+#   Money: values are in GBP (e.g., 500000 = £500k)
+#   Dates: YYYY-MM-DD format (e.g., 1975-06-15)
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# RUN COMMANDS
+# ═══════════════════════════════════════════════════════════════════════════════
+#   ./goPensionForecast                       Interactive mode selector
+#   ./goPensionForecast -html                 Fixed income mode with HTML reports
+#   ./goPensionForecast -depletion            Depletion mode (console)
+#   ./goPensionForecast -depletion -html      Depletion mode with HTML reports
+#   ./goPensionForecast -sensitivity          Fixed income sensitivity analysis
+#   ./goPensionForecast -depletion -sensitivity  Depletion sensitivity analysis
+#   ./goPensionForecast -help                 Show all options
+#
+# See default-config.yaml for all available options with detailed comments.
+
+`)
+	content := append(header, data...)
+	return os.WriteFile(filename, content, 0644)
+}
+
+// LoadDefaultConfig loads the default configuration from embedded default-config.yaml
+// It handles percentage format (e.g., "5%" -> 0.05)
+func LoadDefaultConfig() (*Config, error) {
+	// Use embedded default config (compiled into binary)
+	content := preprocessPercentages(defaultConfigYAML)
+
+	var config Config
+	err := yaml.Unmarshal([]byte(content), &config)
+	if err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
+// preprocessPercentages converts percentage values like "5%" to decimal "0.05"
+func preprocessPercentages(content string) string {
+	// Match patterns like: key: 5% or key: 3.89%
+	// But not inside strings (already quoted)
+	re := regexp.MustCompile(`(:\s*)(\d+\.?\d*)%`)
+	return re.ReplaceAllStringFunc(content, func(match string) string {
+		// Extract the number before %
+		parts := re.FindStringSubmatch(match)
+		if len(parts) >= 3 {
+			numStr := parts[2]
+			num, err := strconv.ParseFloat(numStr, 64)
+			if err == nil {
+				return parts[1] + strconv.FormatFloat(num/100.0, 'f', -1, 64)
+			}
+		}
+		return match
+	})
+}
+
+// GetDefaultValue returns a default value from the default config for display purposes
+func GetDefaultValue(fieldPath string, defaultConfig *Config) string {
+	if defaultConfig == nil {
+		return ""
+	}
+
+	switch fieldPath {
+	// Person fields
+	case "person.name":
+		if len(defaultConfig.People) > 0 {
+			return defaultConfig.People[0].Name
+		}
+	case "person.birth_date":
+		if len(defaultConfig.People) > 0 {
+			return defaultConfig.People[0].BirthDate
+		}
+	case "person.retirement_age":
+		if len(defaultConfig.People) > 0 {
+			return strconv.Itoa(defaultConfig.People[0].RetirementAge)
+		}
+	case "person.state_pension_age":
+		if len(defaultConfig.People) > 0 {
+			return strconv.Itoa(defaultConfig.People[0].StatePensionAge)
+		}
+	case "person.pension":
+		if len(defaultConfig.People) > 0 {
+			return formatDefaultMoney(defaultConfig.People[0].Pension)
+		}
+	case "person.tax_free_savings":
+		if len(defaultConfig.People) > 0 {
+			return formatDefaultMoney(defaultConfig.People[0].TaxFreeSavings)
+		}
+
+	// Person2 fields
+	case "person2.name":
+		if len(defaultConfig.People) > 1 {
+			return defaultConfig.People[1].Name
+		}
+	case "person2.birth_date":
+		if len(defaultConfig.People) > 1 {
+			return defaultConfig.People[1].BirthDate
+		}
+	case "person2.retirement_age":
+		if len(defaultConfig.People) > 1 {
+			return strconv.Itoa(defaultConfig.People[1].RetirementAge)
+		}
+	case "person2.state_pension_age":
+		if len(defaultConfig.People) > 1 {
+			return strconv.Itoa(defaultConfig.People[1].StatePensionAge)
+		}
+	case "person2.pension":
+		if len(defaultConfig.People) > 1 {
+			return formatDefaultMoney(defaultConfig.People[1].Pension)
+		}
+	case "person2.tax_free_savings":
+		if len(defaultConfig.People) > 1 {
+			return formatDefaultMoney(defaultConfig.People[1].TaxFreeSavings)
+		}
+	case "person2.db_pension_name":
+		if len(defaultConfig.People) > 1 {
+			return defaultConfig.People[1].DBPensionName
+		}
+	case "person2.db_pension_amount":
+		if len(defaultConfig.People) > 1 {
+			return formatDefaultMoney(defaultConfig.People[1].DBPensionAmount)
+		}
+	case "person2.db_pension_start_age":
+		if len(defaultConfig.People) > 1 {
+			return strconv.Itoa(defaultConfig.People[1].DBPensionStartAge)
+		}
+
+	// Financial fields
+	case "financial.pension_growth_rate":
+		return formatDefaultPercent(defaultConfig.Financial.PensionGrowthRate)
+	case "financial.savings_growth_rate":
+		return formatDefaultPercent(defaultConfig.Financial.SavingsGrowthRate)
+	case "financial.income_inflation_rate":
+		return formatDefaultPercent(defaultConfig.Financial.IncomeInflationRate)
+	case "financial.state_pension_amount":
+		return formatDefaultMoney(defaultConfig.Financial.StatePensionAmount)
+	case "financial.state_pension_inflation":
+		return formatDefaultPercent(defaultConfig.Financial.StatePensionInflation)
+
+	// Income requirements
+	case "income.monthly_before_age":
+		return formatDefaultMoney(defaultConfig.IncomeRequirements.MonthlyBeforeAge)
+	case "income.monthly_after_age":
+		return formatDefaultMoney(defaultConfig.IncomeRequirements.MonthlyAfterAge)
+	case "income.target_depletion_age":
+		return strconv.Itoa(defaultConfig.IncomeRequirements.TargetDepletionAge)
+	case "income.income_ratio_phase1":
+		return strconv.FormatFloat(defaultConfig.IncomeRequirements.IncomeRatioPhase1, 'f', 0, 64)
+	case "income.income_ratio_phase2":
+		return strconv.FormatFloat(defaultConfig.IncomeRequirements.IncomeRatioPhase2, 'f', 0, 64)
+	case "income.age_threshold":
+		return strconv.Itoa(defaultConfig.IncomeRequirements.AgeThreshold)
+
+	// Mortgage fields
+	case "mortgage.end_year":
+		return strconv.Itoa(defaultConfig.Mortgage.EndYear)
+	case "mortgage.early_payoff_year":
+		return strconv.Itoa(defaultConfig.Mortgage.EarlyPayoffYear)
+	case "mortgage.principal":
+		if len(defaultConfig.Mortgage.Parts) > 0 {
+			return formatDefaultMoney(defaultConfig.Mortgage.Parts[0].Principal)
+		}
+	case "mortgage.interest_rate":
+		if len(defaultConfig.Mortgage.Parts) > 0 {
+			return formatDefaultPercent(defaultConfig.Mortgage.Parts[0].InterestRate)
+		}
+	case "mortgage.term_years":
+		if len(defaultConfig.Mortgage.Parts) > 0 {
+			return strconv.Itoa(defaultConfig.Mortgage.Parts[0].TermYears)
+		}
+	case "mortgage.start_year":
+		if len(defaultConfig.Mortgage.Parts) > 0 {
+			return strconv.Itoa(defaultConfig.Mortgage.Parts[0].StartYear)
+		}
+
+	// Simulation fields
+	case "simulation.start_year":
+		return strconv.Itoa(defaultConfig.Simulation.StartYear)
+	case "simulation.end_age":
+		return strconv.Itoa(defaultConfig.Simulation.EndAge)
+
+	// Sensitivity fields
+	case "sensitivity.pension_growth_min":
+		return formatDefaultPercent(defaultConfig.Sensitivity.PensionGrowthMin)
+	case "sensitivity.pension_growth_max":
+		return formatDefaultPercent(defaultConfig.Sensitivity.PensionGrowthMax)
+	case "sensitivity.savings_growth_min":
+		return formatDefaultPercent(defaultConfig.Sensitivity.SavingsGrowthMin)
+	case "sensitivity.savings_growth_max":
+		return formatDefaultPercent(defaultConfig.Sensitivity.SavingsGrowthMax)
+	case "sensitivity.step_size":
+		return formatDefaultPercent(defaultConfig.Sensitivity.StepSize)
+	}
+
+	return ""
+}
+
+func formatDefaultMoney(amount float64) string {
+	if amount >= 1000000 {
+		return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(amount/1000000, 'f', 1, 64), "0"), ".") + "m"
+	} else if amount >= 1000 {
+		return strings.TrimRight(strings.TrimRight(strconv.FormatFloat(amount/1000, 'f', 1, 64), "0"), ".") + "k"
+	}
+	return strconv.FormatFloat(amount, 'f', 0, 64)
+}
+
+func formatDefaultPercent(rate float64) string {
+	return strconv.FormatFloat(rate*100, 'f', 2, 64) + "%"
+}
+
+// GetBirthYear extracts the birth year from a date string (YYYY-MM-DD)
+func GetBirthYear(birthDate string) int {
+	t, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		return 0
+	}
+	return t.Year()
+}
+
+// FindPerson finds a person by name in the config
+func (c *Config) FindPerson(name string) *PersonConfig {
+	for i := range c.People {
+		if c.People[i].Name == name {
+			return &c.People[i]
+		}
+	}
+	return nil
+}
+
+// GetReferencePerson returns the reference person for income requirements
+func (c *Config) GetReferencePerson() *PersonConfig {
+	return c.FindPerson(c.IncomeRequirements.ReferencePerson)
+}
+
+// GetSimulationReferencePerson returns the reference person for simulation end
+func (c *Config) GetSimulationReferencePerson() *PersonConfig {
+	return c.FindPerson(c.Simulation.ReferencePerson)
+}
+
+// CalculateMonthlyPayment calculates the monthly payment for a repayment mortgage
+// Using formula: M = P * [r(1+r)^n] / [(1+r)^n - 1]
+func (m *MortgagePartConfig) CalculateMonthlyPayment() float64 {
+	if !m.IsRepayment || m.TermYears == 0 {
+		// Interest-only: just pay interest
+		return m.Principal * m.InterestRate / 12
+	}
+
+	monthlyRate := m.InterestRate / 12
+	numPayments := float64(m.TermYears * 12)
+
+	if monthlyRate == 0 {
+		return m.Principal / numPayments
+	}
+
+	factor := math.Pow(1+monthlyRate, numPayments)
+	return m.Principal * (monthlyRate * factor) / (factor - 1)
+}
+
+// CalculateAnnualPayment returns the total annual payment for this mortgage part
+func (m *MortgagePartConfig) CalculateAnnualPayment() float64 {
+	return m.CalculateMonthlyPayment() * 12
+}
+
+// CalculateRemainingBalance calculates the remaining principal balance at a given year
+// For repayment mortgages: uses amortization formula
+// For interest-only: always returns full principal
+func (m *MortgagePartConfig) CalculateRemainingBalance(atYear int) float64 {
+	if !m.IsRepayment {
+		// Interest-only: full principal always remains
+		return m.Principal
+	}
+
+	yearsElapsed := atYear - m.StartYear
+	if yearsElapsed <= 0 {
+		return m.Principal
+	}
+
+	endYear := m.StartYear + m.TermYears
+	if atYear >= endYear {
+		return 0 // Fully paid off
+	}
+
+	monthlyRate := m.InterestRate / 12
+	totalPayments := float64(m.TermYears * 12)
+	paymentsMade := float64(yearsElapsed * 12)
+
+	if monthlyRate == 0 {
+		// No interest: simple linear payoff
+		return m.Principal * (1 - paymentsMade/totalPayments)
+	}
+
+	// Remaining balance formula: B = P * [(1+r)^n - (1+r)^p] / [(1+r)^n - 1]
+	factorN := math.Pow(1+monthlyRate, totalPayments)
+	factorP := math.Pow(1+monthlyRate, paymentsMade)
+
+	return m.Principal * (factorN - factorP) / (factorN - 1)
+}
+
+// GetTotalAnnualPayment returns the combined annual payment for all mortgage parts
+func (c *Config) GetTotalAnnualPayment() float64 {
+	total := 0.0
+	for _, part := range c.Mortgage.Parts {
+		total += part.CalculateAnnualPayment()
+	}
+	return total
+}
+
+// GetTotalPayoffAmount returns the total amount needed to pay off all mortgages at a given year
+func (c *Config) GetTotalPayoffAmount(atYear int) float64 {
+	total := 0.0
+	for _, part := range c.Mortgage.Parts {
+		total += part.CalculateRemainingBalance(atYear)
+	}
+	return total
+}
