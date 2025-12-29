@@ -95,9 +95,9 @@ people:
     pension: 500000.00
     isa_annual_limit: 20000.00     # Max annual ISA contribution (£)
     # Optional: Defined Benefit pension (e.g., Teachers, NHS, Civil Service)
-    db_pension_amount: 5000.00     # Annual DB pension amount (£)
-    db_pension_start_age: 67       # Age when DB pension starts
-    db_pension_name: "Teachers Pension"
+    db_pension_amount: 400.00     # Annual DB pension amount (£)
+    db_pension_start_age: 57       # Age when DB pension starts
+    db_pension_name: "Government Pension"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FINANCIAL - Growth rates and fixed income sources

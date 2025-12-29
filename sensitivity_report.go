@@ -68,29 +68,8 @@ func RunSensitivityAnalysis(config *Config) *SensitivityAnalysis {
 	savingsRates := buildGrowthRates(savingsMin, savingsMax, step)
 	timestamp := time.Now().Format("2006-01-02_1504")
 
-	// Define strategies (same as main.go)
-	strategies := []SimulationParams{
-		// Early payoff
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
-		// Normal payoff
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
-		// Extended (+10 years)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
-		// PCLS mortgage payoff (use 25% lump sum, no further tax-free)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
-	}
+	// Get strategies based on whether there's a mortgage
+	strategies := GetStrategiesForConfig(config)
 
 	// Apply config settings to strategies
 	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()

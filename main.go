@@ -288,45 +288,29 @@ func runConsoleMode(configFile string, showDetails, showDrawdown bool, yearDetai
 	// Print header with configuration summary
 	PrintHeader(config)
 
-	// Define strategy combinations (4 drawdown orders × 4 mortgage options = 16 scenarios)
-	strategies := []SimulationParams{
-		// Early mortgage payoff scenarios
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
-		// Normal mortgage payoff scenarios (pay at end year)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
-		// Extended mortgage scenarios (pay 10 years after normal end)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
-		// PCLS mortgage payoff scenarios (use 25% lump sum to pay mortgage, no further tax-free)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
-	}
+	// Get strategies based on whether there's a mortgage
+	strategies := GetStrategiesForConfig(config)
 
 	// Run all strategies
-	fmt.Println("Running 16 scenarios (4 strategies × 4 mortgage options)...")
-	fmt.Println()
-	annualPayment := config.GetTotalAnnualPayment()
-	earlyPayoff := config.GetTotalPayoffAmount(config.Mortgage.EarlyPayoffYear)
-	normalPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear)
-	extendedPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear + 10)
-	fmt.Println("  Mortgage Options:")
-	fmt.Printf("    Early: Pay £%.0f/year until %d, then £%.0fk payoff\n",
-		annualPayment, config.Mortgage.EarlyPayoffYear, earlyPayoff/1000)
-	fmt.Printf("    Normal: Pay £%.0f/year until %d, then £%.0fk payoff\n",
-		annualPayment, config.Mortgage.EndYear, normalPayoff/1000)
-	fmt.Printf("    Extended: Pay £%.0f/year until %d, then £%.0fk payoff\n",
-		annualPayment, config.Mortgage.EndYear+10, extendedPayoff/1000)
-	fmt.Println()
+	if config.HasMortgage() {
+		fmt.Println("Running 16 scenarios (4 strategies × 4 mortgage options)...")
+		fmt.Println()
+		annualPayment := config.GetTotalAnnualPayment()
+		earlyPayoff := config.GetTotalPayoffAmount(config.Mortgage.EarlyPayoffYear)
+		normalPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear)
+		extendedPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear + 10)
+		fmt.Println("  Mortgage Options:")
+		fmt.Printf("    Early: Pay £%.0f/year until %d, then £%.0fk payoff\n",
+			annualPayment, config.Mortgage.EarlyPayoffYear, earlyPayoff/1000)
+		fmt.Printf("    Normal: Pay £%.0f/year until %d, then £%.0fk payoff\n",
+			annualPayment, config.Mortgage.EndYear, normalPayoff/1000)
+		fmt.Printf("    Extended: Pay £%.0f/year until %d, then £%.0fk payoff\n",
+			annualPayment, config.Mortgage.EndYear+10, extendedPayoff/1000)
+		fmt.Println()
+	} else {
+		fmt.Println("Running 4 scenarios (no mortgage)...")
+		fmt.Println()
+	}
 	fmt.Println("  Drawdown Strategies:")
 	fmt.Println("    1. Savings First (ISA → Pension)")
 	fmt.Println("    2. Pension First (Pension → ISA)")

@@ -159,28 +159,8 @@ func getBalanceAtYear(result SimulationResult, targetYear int) float64 {
 
 // RunAllDepletionCalculations runs depletion calculation for all strategies
 func RunAllDepletionCalculations(config *Config) []DepletionResult {
-	strategies := []SimulationParams{
-		// Early payoff
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
-		// Normal payoff
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
-		// Extended (+10 years)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageExtended},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
-		// PCLS mortgage payoff (use 25% lump sum, no further tax-free)
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: PCLSMortgagePayoff},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
-	}
+	// Get strategies based on whether there's a mortgage
+	strategies := GetDepletionStrategiesForConfig(config)
 
 	// Apply config settings to strategies
 	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()
@@ -438,13 +418,10 @@ func getPensionBalanceAtYear(result SimulationResult, targetYear int) float64 {
 }
 
 // RunPensionOnlyDepletionCalculations runs pension-only depletion calculation for strategies
-// Uses PensionOnly drawdown with all mortgage options
+// Uses PensionOnly drawdown with mortgage options based on config
 func RunPensionOnlyDepletionCalculations(config *Config) []DepletionResult {
-	strategies := []SimulationParams{
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageExtended},
-	}
+	// Get strategies based on whether there's a mortgage
+	strategies := GetPensionOnlyStrategiesForConfig(config)
 
 	results := make([]DepletionResult, len(strategies))
 	for i, params := range strategies {
@@ -457,11 +434,8 @@ func RunPensionOnlyDepletionCalculations(config *Config) []DepletionResult {
 // RunPensionToISADepletionCalculations runs depletion using PensionToISA strategy
 // This efficiently moves excess pension money to ISAs while depleting
 func RunPensionToISADepletionCalculations(config *Config) []DepletionResult {
-	strategies := []SimulationParams{
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
-	}
+	// Get strategies based on whether there's a mortgage
+	strategies := GetPensionToISAStrategiesForConfig(config)
 
 	// Apply config settings to strategies
 	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()

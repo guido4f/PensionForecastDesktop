@@ -534,3 +534,16 @@ func (c *Config) GetTotalPayoffAmount(atYear int) float64 {
 	}
 	return total
 }
+
+// HasMortgage returns true if there is an active mortgage with principal > 0
+func (c *Config) HasMortgage() bool {
+	if len(c.Mortgage.Parts) == 0 {
+		return false
+	}
+	for _, part := range c.Mortgage.Parts {
+		if part.Principal > 0 {
+			return true
+		}
+	}
+	return false
+}

@@ -722,3 +722,75 @@ func ExecutePensionToISADrawdown(people []*Person, netNeeded float64, strategy S
 
 	return breakdown
 }
+
+// GetStrategiesForConfig returns the appropriate simulation strategies based on config
+// If there's no mortgage, only returns strategies with MortgageNormal (no point testing different payoff options)
+func GetStrategiesForConfig(config *Config) []SimulationParams {
+	if config.HasMortgage() {
+		// Full set of strategies with all mortgage options
+		return []SimulationParams{
+			// Early payoff strategies
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
+			// Normal payoff strategies
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+			// Extended (+10 years) payoff strategies
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
+			// PCLS mortgage payoff (use 25% lump sum, no further tax-free)
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: PCLSMortgagePayoff},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: PCLSMortgagePayoff},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: PCLSMortgagePayoff},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
+		}
+	}
+
+	// No mortgage - only test drawdown order strategies (mortgage options are irrelevant)
+	return []SimulationParams{
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+	}
+}
+
+// GetDepletionStrategiesForConfig returns strategies for depletion mode
+// Similar to GetStrategiesForConfig but used in depletion calculations
+func GetDepletionStrategiesForConfig(config *Config) []SimulationParams {
+	return GetStrategiesForConfig(config)
+}
+
+// GetPensionOnlyStrategiesForConfig returns strategies for pension-only mode
+func GetPensionOnlyStrategiesForConfig(config *Config) []SimulationParams {
+	if config.HasMortgage() {
+		return []SimulationParams{
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageExtended},
+		}
+	}
+	return []SimulationParams{
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageNormal},
+	}
+}
+
+// GetPensionToISAStrategiesForConfig returns strategies for pension-to-ISA mode
+func GetPensionToISAStrategiesForConfig(config *Config) []SimulationParams {
+	if config.HasMortgage() {
+		return []SimulationParams{
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
+		}
+	}
+	return []SimulationParams{
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+	}
+}
