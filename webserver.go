@@ -55,6 +55,7 @@ type APISimulationResponse struct {
 
 // APIResultSummary is a simplified simulation result for API responses
 type APIResultSummary struct {
+	StrategyIdx    int                `json:"strategy_idx"`    // Original index for PDF export
 	Strategy       string             `json:"strategy"`
 	ShortName      string             `json:"short_name"`
 	TotalTaxPaid   float64            `json:"total_tax_paid"`
@@ -122,6 +123,8 @@ func (ws *WebServer) Start() error {
 	mux.HandleFunc("/api/simulate/pension-to-isa", ws.handleSimulatePensionToISA)
 	mux.HandleFunc("/api/simulate/sensitivity", ws.handleSensitivityGrid)
 	mux.HandleFunc("/api/export-csv", ws.handleExportCSV)
+	mux.HandleFunc("/api/export-pdf", ws.handleExportPDF)
+	mux.HandleFunc("/api/download-pdf", ws.handleDownloadPDF)
 	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
 
 	// Listen on the address (use :0 for auto-assign)
@@ -165,6 +168,8 @@ func (ws *WebServer) StartForEmbedded() (url string, cleanup func(), err error) 
 	mux.HandleFunc("/api/simulate/pension-to-isa", ws.handleSimulatePensionToISA)
 	mux.HandleFunc("/api/simulate/sensitivity", ws.handleSensitivityGrid)
 	mux.HandleFunc("/api/export-csv", ws.handleExportCSV)
+	mux.HandleFunc("/api/export-pdf", ws.handleExportPDF)
+	mux.HandleFunc("/api/download-pdf", ws.handleDownloadPDF)
 	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
 
 	// Listen on the address (use :0 for auto-assign)
@@ -701,6 +706,171 @@ func (ws *WebServer) handleOpenFolder(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// APIPDFExportRequest extends APISimulationRequest with strategy index for PDF export
+type APIPDFExportRequest struct {
+	APISimulationRequest
+	StrategyIdx int `json:"strategy_idx"` // Index of the strategy to export
+}
+
+// PDFExportResponse represents the response from PDF export
+type PDFExportResponse struct {
+	Success  bool   `json:"success"`
+	FilePath string `json:"file_path,omitempty"`
+	Message  string `json:"message"`
+}
+
+// handleExportPDF generates a detailed PDF action plan for a strategy and saves to file
+func (ws *WebServer) handleExportPDF(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(PDFExportResponse{
+			Success: false,
+			Message: "Method not allowed",
+		})
+		return
+	}
+
+	// Parse the request
+	var req APIPDFExportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PDFExportResponse{
+			Success: false,
+			Message: "Invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Build config using the standard method
+	config := ws.buildConfig(&req.APISimulationRequest)
+
+	// Get the strategies based on mode
+	var strategies []SimulationParams
+	if req.Mode == "pension-to-isa" {
+		strategies = GetPensionToISAStrategiesForConfig(config)
+	} else {
+		strategies = GetStrategiesForConfig(config)
+	}
+	if req.StrategyIdx < 0 || req.StrategyIdx >= len(strategies) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PDFExportResponse{
+			Success: false,
+			Message: fmt.Sprintf("Invalid strategy index: %d (max: %d)", req.StrategyIdx, len(strategies)-1),
+		})
+		return
+	}
+
+	// Apply config settings
+	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()
+	strategies[req.StrategyIdx].MaximizeCoupleISA = maximizeCoupleISA
+
+	// Run the simulation for this strategy
+	result := RunSimulation(strategies[req.StrategyIdx], config)
+
+	// Generate the PDF
+	pdfBytes, err := GenerateStrategyPDFReport(config, result)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PDFExportResponse{
+			Success: false,
+			Message: "Failed to generate PDF: " + err.Error(),
+		})
+		return
+	}
+
+	// Create exports directory if it doesn't exist
+	exportDir := "exports"
+	if err := os.MkdirAll(exportDir, 0755); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PDFExportResponse{
+			Success: false,
+			Message: "Failed to create exports directory: " + err.Error(),
+		})
+		return
+	}
+
+	// Generate filename with strategy info and timestamp
+	safeStrategyName := strings.ReplaceAll(result.Params.ShortName(), "/", "-")
+	safeStrategyName = strings.ReplaceAll(safeStrategyName, " ", "_")
+	filename := fmt.Sprintf("action-plan-%s-%s.pdf", safeStrategyName, time.Now().Format("2006-01-02-150405"))
+	filePath := filepath.Join(exportDir, filename)
+
+	// Write the file
+	if err := os.WriteFile(filePath, pdfBytes, 0644); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(PDFExportResponse{
+			Success: false,
+			Message: "Failed to write PDF: " + err.Error(),
+		})
+		return
+	}
+
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		absPath = filePath
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(PDFExportResponse{
+		Success:  true,
+		FilePath: absPath,
+		Message:  fmt.Sprintf("PDF action plan saved to %s", absPath),
+	})
+}
+
+// handleDownloadPDF returns PDF content directly for browser download
+func (ws *WebServer) handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse the request
+	var req APIPDFExportRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Build config using the standard method
+	config := ws.buildConfig(&req.APISimulationRequest)
+
+	// Get the strategies based on mode
+	var strategies []SimulationParams
+	if req.Mode == "pension-to-isa" {
+		strategies = GetPensionToISAStrategiesForConfig(config)
+	} else {
+		strategies = GetStrategiesForConfig(config)
+	}
+	if req.StrategyIdx < 0 || req.StrategyIdx >= len(strategies) {
+		http.Error(w, fmt.Sprintf("Invalid strategy index: %d", req.StrategyIdx), http.StatusBadRequest)
+		return
+	}
+
+	// Apply config settings
+	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()
+	strategies[req.StrategyIdx].MaximizeCoupleISA = maximizeCoupleISA
+
+	// Run the simulation
+	result := RunSimulation(strategies[req.StrategyIdx], config)
+
+	// Generate the PDF
+	pdfBytes, err := GenerateStrategyPDFReport(config, result)
+	if err != nil {
+		http.Error(w, "Failed to generate PDF: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Set headers for PDF download
+	safeStrategyName := strings.ReplaceAll(result.Params.ShortName(), "/", "-")
+	filename := fmt.Sprintf("action-plan-%s.pdf", safeStrategyName)
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(pdfBytes)))
+	w.Write(pdfBytes)
+}
+
 // runFixedSimulation runs fixed income mode
 // parseOptimizationGoal converts string to OptimizationGoal
 func parseOptimizationGoal(s string) OptimizationGoal {
@@ -745,9 +915,10 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 	}
 
 	// First pass: Find best among strategies that don't run out
-	for _, params := range strategies {
+	for i, params := range strategies {
 		result := RunSimulation(params, config)
 		summary := convertToAPISummary(result, true, config.Financial.IncomeInflationRate)
+		summary.StrategyIdx = i // Track original index for PDF export
 		results = append(results, summary)
 		simResults = append(simResults, result)
 
@@ -815,8 +986,9 @@ func (ws *WebServer) runDepletionSimulation(config *Config) APISimulationRespons
 	var bestResult *APIResultSummary
 	bestIncome := 0.0
 
-	for _, dr := range depletionResults {
+	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
+		summary.StrategyIdx = i // Track original index for PDF export
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
 		results = append(results, summary)
 
@@ -849,8 +1021,9 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config) APISimulationRespo
 	var bestResult *APIResultSummary
 	bestIncome := 0.0
 
-	for _, dr := range depletionResults {
+	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
+		summary.StrategyIdx = i // Track original index for PDF export
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
 		// Calculate final ISA from simulation result
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
@@ -885,8 +1058,9 @@ func (ws *WebServer) runPensionToISASimulation(config *Config) APISimulationResp
 	var bestResult *APIResultSummary
 	bestIncome := 0.0
 
-	for _, dr := range depletionResults {
+	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
+		summary.StrategyIdx = i // Track original index for PDF export
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
 		// Calculate final ISA from simulation result
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
@@ -3123,6 +3297,12 @@ const webUIHTML = `<!DOCTYPE html>
                 html += '<span><strong>Pension Drawdown Start:</strong> ' + (r.pension_drawdown_year || 'N/A') + '</span>';
                 html += '<span><strong>Final ISA:</strong> ' + formatMoney(r.final_isa || 0) + '</span>';
                 html += '</div>';
+                // PDF Action Plan button - use strategy_idx (original index) not sorted idx
+                html += '<div style="padding:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">';
+                html += '<button onclick="downloadPDFActionPlan(event, ' + r.strategy_idx + ', \'' + r.short_name.replace(/'/g, "\\'") + '\')" class="btn btn-secondary btn-sm" style="display:flex;align-items:center;gap:0.3rem;">';
+                html += '<span style="font-size:1.1em;">📄</span> Download PDF Action Plan';
+                html += '</button>';
+                html += '</div>';
                 html += buildYearTable(r, idx);
                 html += '</div></div>';
             });
@@ -3705,6 +3885,100 @@ const webUIHTML = `<!DOCTYPE html>
             .catch(err => {
                 alert('Could not open folder: ' + err.message);
             });
+        }
+
+        // Download PDF Action Plan for a specific strategy
+        function downloadPDFActionPlan(event, strategyIdx, strategyName) {
+            console.log('PDF export started for strategy:', strategyIdx, strategyName);
+
+            // Show loading indicator
+            const btn = event.target.closest('button');
+            if (!btn) {
+                console.error('Could not find button element');
+                alert('Error: Could not find button');
+                return;
+            }
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<span style="font-size:1.1em;">⏳</span> Generating PDF...';
+            btn.disabled = true;
+
+            try {
+            // Reuse the existing buildRequest function and add strategy_idx
+            const requestBody = buildRequest();
+            requestBody.strategy_idx = strategyIdx;
+
+            console.log('Sending PDF request:', JSON.stringify(requestBody).substring(0, 200) + '...');
+
+            fetch('/api/export-pdf', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            })
+            .then(res => {
+                console.log('PDF response status:', res.status);
+                if (!res.ok) {
+                    return res.text().then(text => {
+                        throw new Error(text || 'Server error: ' + res.status);
+                    });
+                }
+                return res.json();
+            })
+            .then(data => {
+                console.log('PDF response data:', data);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                if (data.success) {
+                    console.log('Showing PDF notification...');
+                    showPDFNotification(data.file_path, strategyName);
+                } else {
+                    alert('PDF generation failed: ' + (data.message || 'Unknown error'));
+                }
+            })
+            .catch(err => {
+                console.error('PDF export error:', err);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                alert('PDF generation failed: ' + (err.message || 'Unknown error'));
+            });
+            } catch (e) {
+                console.error('PDF export exception:', e);
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                alert('PDF generation error: ' + (e.message || 'Unknown error'));
+            }
+        }
+
+        // Show notification for PDF export
+        function showPDFNotification(filePath, strategyName) {
+            console.log('showPDFNotification called:', filePath, strategyName);
+            lastExportPath = filePath;
+
+            // Remove existing notification if any
+            const existing = document.getElementById('export-notification');
+            if (existing) existing.remove();
+
+            const notification = document.createElement('div');
+            notification.id = 'export-notification';
+            notification.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1e40af;color:white;padding:16px 20px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:10000;max-width:500px;font-size:14px;';
+            notification.innerHTML = '<div style="display:flex;align-items:flex-start;gap:12px;">' +
+                '<div style="flex:1;">' +
+                '<div style="font-weight:600;margin-bottom:4px;">PDF Action Plan Generated</div>' +
+                '<div style="font-size:12px;opacity:0.9;margin-bottom:4px;">' + strategyName + '</div>' +
+                '<div style="font-size:11px;opacity:0.8;word-break:break-all;">' + filePath + '</div>' +
+                '</div>' +
+                '<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:white;font-size:18px;cursor:pointer;padding:0;line-height:1;">&times;</button>' +
+                '</div>' +
+                '<div style="margin-top:12px;display:flex;gap:8px;">' +
+                '<button onclick="openExportFolder()" style="background:white;color:#1e40af;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:500;">Open Folder</button>' +
+                '<button onclick="this.parentElement.parentElement.remove()" style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.5);padding:8px 16px;border-radius:4px;cursor:pointer;">Dismiss</button>' +
+                '</div>';
+            document.body.appendChild(notification);
+
+            // Auto-dismiss after 15 seconds
+            setTimeout(() => {
+                const notif = document.getElementById('export-notification');
+                if (notif) notif.remove();
+            }, 15000);
         }
 
         // Helper to escape CSV values

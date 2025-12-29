@@ -7,5 +7,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+require github.com/go-pdf/fpdf v0.9.0
+
 // Use local patched version for webkit2gtk-4.1 support (Ubuntu 24+)
 replace github.com/webview/webview_go => ./vendor_patch/webview

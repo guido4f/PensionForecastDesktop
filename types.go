@@ -105,13 +105,13 @@ func (sp SimulationParams) String() string {
 }
 
 func (sp SimulationParams) ShortName() string {
-	orderShort := "ISA→Pen"
+	orderShort := "ISAFirst"
 	if sp.DrawdownOrder == PensionFirst {
-		orderShort = "Pen→ISA"
+		orderShort = "PenFirst"
 	} else if sp.DrawdownOrder == TaxOptimized {
 		orderShort = "TaxOpt"
 	} else if sp.DrawdownOrder == PensionToISA {
-		orderShort = "Pen+ISA"
+		orderShort = "Pen→ISA"
 	} else if sp.DrawdownOrder == PensionOnly {
 		orderShort = "PenOnly"
 	}
@@ -255,6 +255,10 @@ func (p *Person) TotalWealth() float64 {
 
 // CanAccessPension returns true if the person can access their pension
 func (p *Person) CanAccessPension(year int) bool {
+	// Guard against invalid birth year (would cause incorrect age calculation)
+	if p.BirthYear < 1900 || p.BirthYear > year {
+		return false
+	}
 	age := year - p.BirthYear
 	return age >= p.RetirementAge
 }
@@ -267,6 +271,10 @@ func (p *Person) EffectiveStatePensionAge() int {
 // ReceivesStatePension returns true if the person receives state pension
 // Accounts for any deferral period
 func (p *Person) ReceivesStatePension(year int) bool {
+	// Guard against invalid birth year
+	if p.BirthYear < 1900 || p.BirthYear > year {
+		return false
+	}
 	age := year - p.BirthYear
 	return age >= p.EffectiveStatePensionAge()
 }
@@ -289,6 +297,10 @@ func (p *Person) GetDeferredStatePensionAmount(baseAmount float64) float64 {
 // ReceivesDBPension returns true if the person receives their DB pension
 func (p *Person) ReceivesDBPension(year int) bool {
 	if p.DBPensionAmount <= 0 || p.DBPensionStartAge <= 0 {
+		return false
+	}
+	// Guard against invalid birth year
+	if p.BirthYear < 1900 || p.BirthYear > year {
 		return false
 	}
 	age := year - p.BirthYear
@@ -365,6 +377,10 @@ func (p *Person) GetDBPensionLumpSum() float64 {
 // IsReceivingPartTimeIncome returns true if person is earning part-time income
 func (p *Person) IsReceivingPartTimeIncome(year int) bool {
 	if p.PartTimeIncome <= 0 {
+		return false
+	}
+	// Guard against invalid birth year
+	if p.BirthYear < 1900 || p.BirthYear > year {
 		return false
 	}
 	age := year - p.BirthYear

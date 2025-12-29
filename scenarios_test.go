@@ -642,3 +642,112 @@ func TestScenario_WithMortgage(t *testing.T) {
 
 	t.Logf("With mortgage: %d years simulated, total tax £%.0f", len(result.Years), result.TotalTaxPaid)
 }
+
+// =============================================================================
+// Pension Access Age Validation Tests
+// =============================================================================
+
+func TestCanAccessPension_ValidBirthYear(t *testing.T) {
+	// Test that pension access is correctly gated by retirement age
+
+	testCases := []struct {
+		name          string
+		birthYear     int
+		retirementAge int
+		currentYear   int
+		expectAccess  bool
+	}{
+		// Normal cases
+		{"Before retirement age", 1971, 55, 2025, false},      // Age 54
+		{"At retirement age", 1971, 55, 2026, true},           // Age 55
+		{"After retirement age", 1971, 55, 2030, true},        // Age 59
+		{"Younger person not retired", 1973, 57, 2028, false}, // Age 55, needs 57
+		{"Younger person at retirement", 1973, 57, 2030, true}, // Age 57
+
+		// Edge cases with invalid birth years
+		{"Zero birth year (invalid)", 0, 55, 2025, false},        // BirthYear = 0 should block access
+		{"Negative birth year (invalid)", -100, 55, 2025, false}, // Negative should block
+		{"Future birth year (invalid)", 2030, 55, 2025, false},   // Born after current year
+		{"Ancient birth year (invalid)", 1800, 55, 2025, false},  // Too old to be realistic
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			person := &Person{
+				Name:          "Test",
+				BirthYear:     tc.birthYear,
+				RetirementAge: tc.retirementAge,
+			}
+
+			result := person.CanAccessPension(tc.currentYear)
+			if result != tc.expectAccess {
+				t.Errorf("BirthYear=%d, RetirementAge=%d, Year=%d: expected CanAccessPension=%v, got %v",
+					tc.birthYear, tc.retirementAge, tc.currentYear, tc.expectAccess, result)
+			}
+		})
+	}
+}
+
+func TestPensionWithdrawalsRespectRetirementAge(t *testing.T) {
+	// Test that in a simulation, pension withdrawals only happen after retirement age
+
+	config := &Config{
+		People: []PersonConfig{
+			{
+				Name:            "Person1",
+				BirthDate:       "1970-06-15", // Born 1970, age 55 in 2025
+				RetirementAge:   55,
+				StatePensionAge: 67,
+				TaxFreeSavings:  50000,
+				Pension:         300000,
+			},
+			{
+				Name:            "Person2",
+				BirthDate:       "1972-03-20", // Born 1972, age 53 in 2025, age 57 in 2029
+				RetirementAge:   57,
+				StatePensionAge: 67,
+				TaxFreeSavings:  50000,
+				Pension:         300000,
+			},
+		},
+		Financial: FinancialConfig{
+			PensionGrowthRate:     0.05,
+			SavingsGrowthRate:     0.04,
+			IncomeInflationRate:   0.025,
+			StatePensionInflation: 0.025,
+			StatePensionAmount:    11500,
+		},
+		IncomeRequirements: IncomeConfig{
+			MonthlyBeforeAge: 4000, // High income to force pension withdrawals
+			MonthlyAfterAge:  3000,
+			AgeThreshold:     67,
+			ReferencePerson:  "Person1", // Person1 is reference, retires at 55
+		},
+		Simulation: SimulationConfig{
+			StartYear:       2025, // Person1 is 55, Person2 is 53
+			EndAge:          75,
+			ReferencePerson: "Person1",
+		},
+		TaxBands: ukTaxBands2024,
+	}
+
+	result := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+	}, config)
+
+	// Check that Person2 has no pension withdrawals until they reach age 57 (year 2029)
+	for _, year := range result.Years {
+		person2Age := year.Ages["Person2"]
+		person2TaxableWithdrawal := year.Withdrawals.TaxableFromPension["Person2"]
+		person2TaxFreeWithdrawal := year.Withdrawals.TaxFreeFromPension["Person2"]
+		totalPerson2Withdrawal := person2TaxableWithdrawal + person2TaxFreeWithdrawal
+
+		if person2Age < 57 && totalPerson2Withdrawal > 0 {
+			t.Errorf("Year %d: Person2 (age %d) should not have pension withdrawals before age 57, but had £%.2f",
+				year.Year, person2Age, totalPerson2Withdrawal)
+		}
+	}
+
+	t.Logf("Verified: Person2 pension withdrawals respect retirement age (57)")
+}
