@@ -766,10 +766,34 @@ func (ws *WebServer) handleExportPDF(w http.ResponseWriter, r *http.Request) {
 	strategies[req.StrategyIdx].MaximizeCoupleISA = maximizeCoupleISA
 
 	// Run the simulation for this strategy
-	result := RunSimulation(strategies[req.StrategyIdx], config)
+	// In depletion mode, we need to run the depletion calculation to get the sustainable income
+	var result SimulationResult
+	var pdfConfig *Config = config
+
+	if req.Mode == "depletion" || req.Mode == "pension-only" || req.Mode == "pension-to-isa" {
+		// For depletion modes, run the appropriate calculation
+		var depletionResult DepletionResult
+		switch req.Mode {
+		case "pension-only":
+			depletionResult = CalculatePensionOnlyDepletionIncome(strategies[req.StrategyIdx], config)
+		case "pension-to-isa":
+			depletionResult = CalculateDepletionIncome(strategies[req.StrategyIdx], config)
+		default: // "depletion"
+			depletionResult = CalculateDepletionIncome(strategies[req.StrategyIdx], config)
+		}
+		result = depletionResult.SimulationResult
+
+		// Create a modified config with the calculated income for PDF display
+		pdfConfig = &Config{}
+		*pdfConfig = *config
+		pdfConfig.IncomeRequirements.MonthlyBeforeAge = depletionResult.MonthlyBeforeAge
+		pdfConfig.IncomeRequirements.MonthlyAfterAge = depletionResult.MonthlyAfterAge
+	} else {
+		result = RunSimulation(strategies[req.StrategyIdx], config)
+	}
 
 	// Generate the PDF
-	pdfBytes, err := GenerateStrategyPDFReport(config, result)
+	pdfBytes, err := GenerateStrategyPDFReport(pdfConfig, result)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(PDFExportResponse{
@@ -852,11 +876,35 @@ func (ws *WebServer) handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
 	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()
 	strategies[req.StrategyIdx].MaximizeCoupleISA = maximizeCoupleISA
 
-	// Run the simulation
-	result := RunSimulation(strategies[req.StrategyIdx], config)
+	// Run the simulation for this strategy
+	// In depletion mode, we need to run the depletion calculation to get the sustainable income
+	var result SimulationResult
+	var pdfConfig *Config = config
+
+	if req.Mode == "depletion" || req.Mode == "pension-only" || req.Mode == "pension-to-isa" {
+		// For depletion modes, run the appropriate calculation
+		var depletionResult DepletionResult
+		switch req.Mode {
+		case "pension-only":
+			depletionResult = CalculatePensionOnlyDepletionIncome(strategies[req.StrategyIdx], config)
+		case "pension-to-isa":
+			depletionResult = CalculateDepletionIncome(strategies[req.StrategyIdx], config)
+		default: // "depletion"
+			depletionResult = CalculateDepletionIncome(strategies[req.StrategyIdx], config)
+		}
+		result = depletionResult.SimulationResult
+
+		// Create a modified config with the calculated income for PDF display
+		pdfConfig = &Config{}
+		*pdfConfig = *config
+		pdfConfig.IncomeRequirements.MonthlyBeforeAge = depletionResult.MonthlyBeforeAge
+		pdfConfig.IncomeRequirements.MonthlyAfterAge = depletionResult.MonthlyAfterAge
+	} else {
+		result = RunSimulation(strategies[req.StrategyIdx], config)
+	}
 
 	// Generate the PDF
-	pdfBytes, err := GenerateStrategyPDFReport(config, result)
+	pdfBytes, err := GenerateStrategyPDFReport(pdfConfig, result)
 	if err != nil {
 		http.Error(w, "Failed to generate PDF: "+err.Error(), http.StatusInternalServerError)
 		return
