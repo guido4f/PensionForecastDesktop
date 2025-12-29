@@ -195,9 +195,8 @@ release:
 	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
 		git add -A && \
 		git commit -m "$$msg" || true && \
-		git tag -a "v$(VERSION)" -m "$$msg" && \
 		git push && \
-		git push origin "v$(VERSION)" && \
+		gh release create "v$(VERSION)" --title "v$(VERSION)" --notes "$$msg" --generate-notes && \
 		echo "" && \
 		echo "Released v$(VERSION) successfully!"; \
 	else \
