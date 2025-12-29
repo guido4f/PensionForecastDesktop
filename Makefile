@@ -3,8 +3,11 @@
 # Supports embedded browser (-ui), web server (-web), and console-only builds
 
 BINARY_NAME=pensionForecast
-VERSION?=1.0.0
 BUILD_DIR=build
+
+# Version management - read from VERSION file
+CURRENT_VERSION=$(shell cat VERSION 2>/dev/null || echo "0.0.1")
+VERSION?=$(CURRENT_VERSION)
 
 # Build flags
 LDFLAGS=-ldflags "-s -w"
@@ -13,7 +16,8 @@ LDFLAGS=-ldflags "-s -w"
        ui ui-linux ui-macos ui-macos-intel ui-windows \
        console-all console-linux console-macos console-macos-intel console-windows \
        web-all web-linux web-macos web-macos-intel web-windows \
-       web web-port run-ui
+       web web-port run-ui \
+       release release-patch release-minor release-major version
 
 # Build all cross-platform (console-only, no CGO required)
 all: clean console-all
@@ -157,6 +161,67 @@ clean:
 	@rm -rf $(BUILD_DIR)
 	@rm -f $(BINARY_NAME)
 
+# =============================================================================
+# Release Management
+# =============================================================================
+# Usage:
+#   make release                    - Release with current version (prompts for message)
+#   make release MSG="Fix bug"      - Release with custom message
+#   make release VERSION=1.2.3      - Release with specific version (updates VERSION file)
+#   make release-patch              - Increment patch (0.0.2 -> 0.0.3) and release
+#   make release-minor              - Increment minor (0.0.2 -> 0.1.0) and release
+#   make release-major              - Increment major (0.0.2 -> 1.0.0) and release
+
+# Show current version
+version:
+	@echo "Current version: $(CURRENT_VERSION)"
+
+# Release with current version or VERSION override
+release:
+	@echo "Current version: $(CURRENT_VERSION)"
+	@if [ "$(VERSION)" != "$(CURRENT_VERSION)" ]; then \
+		echo "Updating VERSION file to $(VERSION)"; \
+		echo "$(VERSION)" > VERSION; \
+	fi
+	@if [ -z "$(MSG)" ]; then \
+		read -p "Release message (default: 'Release v$(VERSION)'): " msg; \
+		msg=$${msg:-"Release v$(VERSION)"}; \
+	else \
+		msg="$(MSG)"; \
+	fi; \
+	echo ""; \
+	echo "Will release version v$(VERSION) with message: $$msg"; \
+	read -p "Continue? [y/N] " confirm; \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		git add -A && \
+		git commit -m "$$msg" || true && \
+		git tag -a "v$(VERSION)" -m "$$msg" && \
+		git push && \
+		git push origin "v$(VERSION)" && \
+		echo "" && \
+		echo "Released v$(VERSION) successfully!"; \
+	else \
+		echo "Release cancelled."; \
+	fi
+
+# Increment patch version and release (0.0.2 -> 0.0.3)
+release-patch:
+	@NEW_VERSION=$$(echo $(CURRENT_VERSION) | awk -F. '{print $$1"."$$2"."$$3+1}'); \
+	echo "$$NEW_VERSION" > VERSION; \
+	$(MAKE) release VERSION=$$NEW_VERSION
+
+# Increment minor version and release (0.0.2 -> 0.1.0)
+release-minor:
+	@NEW_VERSION=$$(echo $(CURRENT_VERSION) | awk -F. '{print $$1"."$$2+1".0"}'); \
+	echo "$$NEW_VERSION" > VERSION; \
+	$(MAKE) release VERSION=$$NEW_VERSION
+
+# Increment major version and release (0.0.2 -> 1.0.0)
+release-major:
+	@NEW_VERSION=$$(echo $(CURRENT_VERSION) | awk -F. '{print $$1+1".0.0"}'); \
+	echo "$$NEW_VERSION" > VERSION; \
+	$(MAKE) release VERSION=$$NEW_VERSION
+
 # Show help
 help:
 	@echo "Pension Forecast Build Targets:"
@@ -192,6 +257,15 @@ help:
 	@echo "  make build         - Build for current platform"
 	@echo "  make test          - Run tests"
 	@echo "  make clean         - Remove build artifacts"
+	@echo ""
+	@echo "  Release (triggers GitHub Actions build):"
+	@echo "  make version       - Show current version"
+	@echo "  make release       - Release current version (prompts for message)"
+	@echo "  make release MSG=\"message\" - Release with custom message"
+	@echo "  make release VERSION=1.2.3  - Release specific version"
+	@echo "  make release-patch - Increment patch (x.y.z -> x.y.z+1)"
+	@echo "  make release-minor - Increment minor (x.y.z -> x.y+1.0)"
+	@echo "  make release-major - Increment major (x.y.z -> x+1.0.0)"
 	@echo ""
 	@echo "  Prerequisites for embedded UI builds:"
 	@echo "  - Linux: sudo apt-get install libgtk-3-dev libwebkit2gtk-4.0-dev"
