@@ -145,6 +145,11 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 		drawdownDesc = "Unknown Strategy"
 	}
 
+	// Only add mortgage description if there is a mortgage (year > 0)
+	if mortgagePayoffYear <= 0 {
+		return drawdownDesc
+	}
+
 	var mortgageDesc string
 	switch sp.MortgageOpt {
 	case MortgageEarly:
@@ -156,7 +161,7 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 	case PCLSMortgagePayoff:
 		mortgageDesc = fmt.Sprintf("PCLS lump sum for mortgage %d", mortgagePayoffYear)
 	default:
-		mortgageDesc = "Unknown mortgage option"
+		return drawdownDesc
 	}
 
 	return drawdownDesc + ", " + mortgageDesc

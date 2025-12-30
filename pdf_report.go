@@ -1208,16 +1208,17 @@ func (r *PDFActionPlanReport) getStrategyDescription() string {
 		desc = "Pension Only: Only withdraw from pension, preserving ISA completely for inheritance."
 	}
 
-	mortgagePayoffYear := getMortgagePayoffYear(r.config, r.result.Params)
-	switch r.result.Params.MortgageOpt {
-	case MortgageEarly:
-		desc += fmt.Sprintf(" Mortgage repaid %d.", mortgagePayoffYear)
-	case MortgageExtended:
-		desc += fmt.Sprintf(" Mortgage extended to %d.", mortgagePayoffYear)
-	case PCLSMortgagePayoff:
-		desc += fmt.Sprintf(" Using PCLS lump sum for mortgage in %d.", mortgagePayoffYear)
-	case MortgageNormal:
-		if r.config.HasMortgage() {
+	// Only add mortgage description if there is a mortgage
+	if r.config.HasMortgage() {
+		mortgagePayoffYear := getMortgagePayoffYear(r.config, r.result.Params)
+		switch r.result.Params.MortgageOpt {
+		case MortgageEarly:
+			desc += fmt.Sprintf(" Mortgage repaid %d.", mortgagePayoffYear)
+		case MortgageExtended:
+			desc += fmt.Sprintf(" Mortgage extended to %d.", mortgagePayoffYear)
+		case PCLSMortgagePayoff:
+			desc += fmt.Sprintf(" Using PCLS lump sum for mortgage in %d.", mortgagePayoffYear)
+		case MortgageNormal:
 			desc += fmt.Sprintf(" Mortgage repaid %d.", mortgagePayoffYear)
 		}
 	}
