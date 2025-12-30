@@ -56,6 +56,15 @@ type FinancialConfig struct {
 	// Emergency Fund Preservation
 	EmergencyFundMonths          int  `yaml:"emergency_fund_months" json:"emergency_fund_months"`                     // Minimum months of expenses to keep in ISA (0 = no minimum)
 	EmergencyFundInflationAdjust bool `yaml:"emergency_fund_inflation_adjust" json:"emergency_fund_inflation_adjust"` // Grow threshold with inflation
+	// Gradual Growth Rate Decline (models "age in bonds" strategy - shifting from equities to bonds)
+	GrowthDeclineEnabled         bool    `yaml:"growth_decline_enabled" json:"growth_decline_enabled"`                   // Enable gradual decline of growth rates
+	PensionGrowthEndRate         float64 `yaml:"pension_growth_end_rate" json:"pension_growth_end_rate"`                 // Pension growth rate at target age
+	SavingsGrowthEndRate         float64 `yaml:"savings_growth_end_rate" json:"savings_growth_end_rate"`                 // ISA growth rate at target age
+	GrowthDeclineTargetAge       int     `yaml:"growth_decline_target_age" json:"growth_decline_target_age"`             // Age when growth rates reach end rate
+	GrowthDeclineReferencePerson string  `yaml:"growth_decline_reference_person" json:"growth_decline_reference_person"` // Whose age determines decline (default: simulation reference person)
+	// Depletion Mode Growth Decline (simpler: decline by X% over the depletion period)
+	DepletionGrowthDeclineEnabled bool    `yaml:"depletion_growth_decline_enabled" json:"depletion_growth_decline_enabled"` // Enable growth decline in depletion mode
+	DepletionGrowthDeclinePercent float64 `yaml:"depletion_growth_decline_percent" json:"depletion_growth_decline_percent"` // Percentage to decline (e.g., 0.03 = 3%, so 7% -> 4%)
 }
 
 // IncomeConfig holds income requirement settings
@@ -456,6 +465,15 @@ func (c *Config) GetReferencePerson() *PersonConfig {
 // GetSimulationReferencePerson returns the reference person for simulation end
 func (c *Config) GetSimulationReferencePerson() *PersonConfig {
 	return c.FindPerson(c.Simulation.ReferencePerson)
+}
+
+// GetGrowthDeclineReferencePerson returns the reference person for growth decline
+// Defaults to simulation reference person if not specified
+func (c *Config) GetGrowthDeclineReferencePerson() *PersonConfig {
+	if c.Financial.GrowthDeclineReferencePerson != "" {
+		return c.FindPerson(c.Financial.GrowthDeclineReferencePerson)
+	}
+	return c.GetSimulationReferencePerson()
 }
 
 // CalculateMonthlyPayment calculates the monthly payment for a repayment mortgage

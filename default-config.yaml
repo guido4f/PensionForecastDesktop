@@ -110,6 +110,21 @@ financial:
   state_pension_inflation: 3%      # Annual state pension increase
   tax_band_inflation: 3%           # Tax band adjustment (0% = frozen bands)
 
+  # ═══ GRADUAL GROWTH DECLINE ═══
+  # Models the "age in bonds" strategy - shifting from equities to bonds over time
+  # Growth rates linearly decline from start rate to end rate by target age
+  growth_decline_enabled: false    # Enable gradual growth rate decline
+  pension_growth_end_rate: 4%      # Pension growth rate at target age
+  savings_growth_end_rate: 4%      # ISA growth rate at target age
+  growth_decline_target_age: 80    # Age when growth reaches end rate
+  growth_decline_reference_person: "Person1"  # Whose age determines the decline
+
+  # ═══ DEPLETION MODE GROWTH DECLINE ═══
+  # Simpler alternative for depletion mode: decline by X% from start to target depletion age
+  # Example: 3% decline with 7% start rate = growth declines from 7% to 4% by depletion age
+  depletion_growth_decline_enabled: false  # Enable growth decline for depletion mode
+  depletion_growth_decline_percent: 3%     # Percentage to decline (e.g., 3% = 0.03)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # INCOME REQUIREMENTS - What you need to withdraw
 # ─────────────────────────────────────────────────────────────────────────────
@@ -119,7 +134,7 @@ income_requirements:
   monthly_after_age: 2500.00       # Monthly income at/after age threshold (£)
 
   # ═══ DEPLETION MODE SETTINGS ═══
-target_depletion_age: 80         # Age to deplete funds by (use with -depletion)
+  target_depletion_age: 80         # Age to deplete funds by (use with -depletion)
   income_ratio_phase1: 5.0         # Income ratio before threshold (e.g., 5 in 5:3)
   income_ratio_phase2: 3.0         # Income ratio after threshold (e.g., 3 in 5:3)
 

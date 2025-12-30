@@ -22,6 +22,70 @@ func FormatMoneyPDF(amount float64) string {
 	return pdfText(FormatMoney(amount))
 }
 
+// getGrowthDeclineText returns a text description of growth decline, or empty string if not enabled
+func getGrowthDeclineText(config *Config) string {
+	// Helper to extract birth year from date string (YYYY-MM-DD)
+	getBirthYear := func(dateStr string) int {
+		if len(dateStr) >= 4 {
+			var year int
+			fmt.Sscanf(dateStr, "%d", &year)
+			return year
+		}
+		return 0
+	}
+
+	// Check for standard growth decline
+	if config.Financial.GrowthDeclineEnabled {
+		refPerson := config.Financial.GrowthDeclineReferencePerson
+		if refPerson == "" {
+			refPerson = config.Simulation.ReferencePerson
+		}
+
+		var birthYear int
+		for _, p := range config.People {
+			if p.Name == refPerson || (refPerson == "" && birthYear == 0) {
+				birthYear = getBirthYear(p.BirthDate)
+			}
+		}
+		endYear := birthYear + config.Financial.GrowthDeclineTargetAge
+		if endYear <= config.Simulation.StartYear {
+			endYear = config.Simulation.StartYear + 20
+		}
+
+		return fmt.Sprintf("Growth Decline: %.0f%% to %.0f%% (Pen) / %.0f%% to %.0f%% (ISA) by %d",
+			config.Financial.PensionGrowthRate*100, config.Financial.PensionGrowthEndRate*100,
+			config.Financial.SavingsGrowthRate*100, config.Financial.SavingsGrowthEndRate*100,
+			endYear)
+	}
+
+	// Check for depletion-specific growth decline
+	if config.Financial.DepletionGrowthDeclineEnabled && config.IncomeRequirements.TargetDepletionAge > 0 {
+		refPerson := config.IncomeRequirements.ReferencePerson
+		if refPerson == "" {
+			refPerson = config.Simulation.ReferencePerson
+		}
+
+		var birthYear int
+		for _, p := range config.People {
+			if p.Name == refPerson || (refPerson == "" && birthYear == 0) {
+				birthYear = getBirthYear(p.BirthDate)
+			}
+		}
+		endYear := birthYear + config.IncomeRequirements.TargetDepletionAge
+		if endYear <= config.Simulation.StartYear {
+			endYear = config.Simulation.StartYear + 20
+		}
+
+		pensionEnd := config.Financial.PensionGrowthRate - config.Financial.DepletionGrowthDeclinePercent
+
+		return fmt.Sprintf("Growth Decline: %.0f%% to %.0f%% (%d to %d)",
+			config.Financial.PensionGrowthRate*100, pensionEnd*100,
+			config.Simulation.StartYear, endYear)
+	}
+
+	return ""
+}
+
 // getMortgagePayoffYear returns the year the mortgage will be paid off based on strategy
 func getMortgagePayoffYear(config *Config, params SimulationParams) int {
 	switch params.MortgageOpt {
@@ -323,6 +387,14 @@ func (r *PDFActionPlanReport) addStrategyOverview() {
 			r.pdf.Ln(-1)
 		}
 	}
+
+	// Growth decline info if enabled
+	if gdText := getGrowthDeclineText(r.config); gdText != "" {
+		r.pdf.SetTextColor(150, 80, 0) // Orange-brown color
+		r.pdf.CellFormat(contentWidth, 5, gdText, "", 1, "L", false, 0, "")
+		r.pdf.SetTextColor(50, 50, 50)
+	}
+
 	r.pdf.Ln(5)
 
 	// Starting Balances Table

@@ -7,6 +7,71 @@ import (
 	"time"
 )
 
+// getGrowthDeclineHTML returns HTML for displaying growth decline info, or empty string if not enabled
+func getGrowthDeclineHTML(config *Config) string {
+	// Helper to extract birth year from date string (YYYY-MM-DD)
+	getBirthYear := func(dateStr string) int {
+		if len(dateStr) >= 4 {
+			var year int
+			fmt.Sscanf(dateStr, "%d", &year)
+			return year
+		}
+		return 0
+	}
+
+	// Check for standard growth decline
+	if config.Financial.GrowthDeclineEnabled {
+		refPerson := config.Financial.GrowthDeclineReferencePerson
+		if refPerson == "" {
+			refPerson = config.Simulation.ReferencePerson
+		}
+
+		// Find reference person's birth year
+		var birthYear int
+		for _, p := range config.People {
+			if p.Name == refPerson || (refPerson == "" && birthYear == 0) {
+				birthYear = getBirthYear(p.BirthDate)
+			}
+		}
+		endYear := birthYear + config.Financial.GrowthDeclineTargetAge
+		if endYear <= config.Simulation.StartYear {
+			endYear = config.Simulation.StartYear + 20
+		}
+
+		return fmt.Sprintf(`<tr><td>Growth Decline</td><td>📉 %.0f%% → %.0f%% (Pen) / %.0f%% → %.0f%% (ISA) by %d</td></tr>`,
+			config.Financial.PensionGrowthRate*100, config.Financial.PensionGrowthEndRate*100,
+			config.Financial.SavingsGrowthRate*100, config.Financial.SavingsGrowthEndRate*100,
+			endYear)
+	}
+
+	// Check for depletion-specific growth decline
+	if config.Financial.DepletionGrowthDeclineEnabled && config.IncomeRequirements.TargetDepletionAge > 0 {
+		refPerson := config.IncomeRequirements.ReferencePerson
+		if refPerson == "" {
+			refPerson = config.Simulation.ReferencePerson
+		}
+
+		var birthYear int
+		for _, p := range config.People {
+			if p.Name == refPerson || (refPerson == "" && birthYear == 0) {
+				birthYear = getBirthYear(p.BirthDate)
+			}
+		}
+		endYear := birthYear + config.IncomeRequirements.TargetDepletionAge
+		if endYear <= config.Simulation.StartYear {
+			endYear = config.Simulation.StartYear + 20
+		}
+
+		pensionEnd := config.Financial.PensionGrowthRate - config.Financial.DepletionGrowthDeclinePercent
+
+		return fmt.Sprintf(`<tr><td>Growth Decline</td><td>📉 %.0f%% → %.0f%% (%d to %d)</td></tr>`,
+			config.Financial.PensionGrowthRate*100, pensionEnd*100,
+			config.Simulation.StartYear, endYear)
+	}
+
+	return "" // No growth decline
+}
+
 // GenerateHTMLReport generates an HTML detailed report for a simulation result
 func GenerateHTMLReport(result SimulationResult, config *Config, filename string) error {
 	f, err := os.Create(filename)
@@ -284,6 +349,7 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
                         <tr><td>Monthly Income (after %d)</td><td>%s [after tax]</td></tr>
                         <tr><td>Mortgage (until %d)</td><td>%s/year</td></tr>
                         <tr><td>Simulation Period</td><td>%d to age %d</td></tr>
+                        %s
                     </table>
                 </div>
             </div>
@@ -294,7 +360,8 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 		config.IncomeRequirements.AgeThreshold,
 		FormatMoney(config.IncomeRequirements.MonthlyAfterAge),
 		config.Mortgage.EndYear, FormatMoney(config.GetTotalAnnualPayment()),
-		config.Simulation.StartYear, config.Simulation.EndAge)
+		config.Simulation.StartYear, config.Simulation.EndAge,
+		getGrowthDeclineHTML(config))
 
 	// Mortgage details (if any mortgage parts exist)
 	if len(config.Mortgage.Parts) > 0 {
@@ -839,6 +906,7 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
                             <tr><td>Income (before %d)</td><td>%s/month [after tax]</td></tr>
                             <tr><td>Income (after %d)</td><td>%s/month [after tax]</td></tr>
                             <tr><td>Mortgage</td><td>%s/year until %d</td></tr>
+                            %s
                         </table>
                     </div>
                 </div>
@@ -848,7 +916,8 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
 		FormatMoney(config.IncomeRequirements.MonthlyBeforeAge),
 		config.IncomeRequirements.AgeThreshold,
 		FormatMoney(config.IncomeRequirements.MonthlyAfterAge),
-		FormatMoney(config.GetTotalAnnualPayment()), config.Mortgage.EndYear)
+		FormatMoney(config.GetTotalAnnualPayment()), config.Mortgage.EndYear,
+		getGrowthDeclineHTML(config))
 
 	// Recommendation section
 	if bestIdx >= 0 {

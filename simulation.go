@@ -100,15 +100,47 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 	// Initialize VPW state if enabled
 	vpw := NewVPWState(config)
 
+	// Get growth decline reference person (if enabled)
+	var growthDeclineRefPerson *PersonConfig
+	var growthDeclineStartAge int
+	if config.Financial.GrowthDeclineEnabled {
+		growthDeclineRefPerson = config.GetGrowthDeclineReferencePerson()
+		if growthDeclineRefPerson != nil {
+			growthDeclineStartAge = config.Simulation.StartYear - GetBirthYear(growthDeclineRefPerson.BirthDate)
+		}
+	}
+
 	// Run simulation year by year
 	for year := config.Simulation.StartYear; year <= endYear; year++ {
 		state := NewYearState(year)
 		yearsFromStart := year - config.Simulation.StartYear
 
+		// Calculate growth rates for this year (may be declining based on age)
+		pensionRate := config.Financial.PensionGrowthRate
+		savingsRate := config.Financial.SavingsGrowthRate
+
+		if config.Financial.GrowthDeclineEnabled && growthDeclineRefPerson != nil {
+			currentAge := year - GetBirthYear(growthDeclineRefPerson.BirthDate)
+			targetAge := config.Financial.GrowthDeclineTargetAge
+
+			pensionRate = GetGrowthRateForYear(
+				config.Financial.PensionGrowthRate,
+				config.Financial.PensionGrowthEndRate,
+				growthDeclineStartAge, currentAge, targetAge)
+			savingsRate = GetGrowthRateForYear(
+				config.Financial.SavingsGrowthRate,
+				config.Financial.SavingsGrowthEndRate,
+				growthDeclineStartAge, currentAge, targetAge)
+		}
+
+		// Store growth rates used this year
+		state.PensionGrowthRateUsed = pensionRate
+		state.SavingsGrowthRateUsed = savingsRate
+
 		// Apply growth at start of year (except first year)
 		if year > config.Simulation.StartYear {
 			for _, p := range people {
-				ApplyGrowth(p, config.Financial.SavingsGrowthRate, config.Financial.PensionGrowthRate)
+				ApplyGrowth(p, savingsRate, pensionRate)
 			}
 		}
 

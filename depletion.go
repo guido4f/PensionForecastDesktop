@@ -104,6 +104,25 @@ func cloneConfigWithMultiplier(config *Config, multiplier float64) *Config {
 	newConfig.IncomeRequirements.MonthlyAfterAge =
 		config.IncomeRequirements.IncomeRatioPhase2 * multiplier
 
+	// Enable growth decline if depletion growth decline is enabled
+	// This automatically sets up the standard growth decline mechanism using:
+	// - Start rate: current pension/savings growth rate
+	// - End rate: start rate minus the decline percent
+	// - Target age: depletion target age
+	// - Reference person: income requirements reference person
+	if config.Financial.DepletionGrowthDeclineEnabled && config.Financial.DepletionGrowthDeclinePercent > 0 {
+		newConfig.Financial.GrowthDeclineEnabled = true
+		newConfig.Financial.PensionGrowthEndRate = config.Financial.PensionGrowthRate - config.Financial.DepletionGrowthDeclinePercent
+		newConfig.Financial.SavingsGrowthEndRate = config.Financial.SavingsGrowthRate - config.Financial.DepletionGrowthDeclinePercent
+		newConfig.Financial.GrowthDeclineTargetAge = config.IncomeRequirements.TargetDepletionAge
+		// Use income requirements reference person, falling back to simulation reference person
+		if config.IncomeRequirements.ReferencePerson != "" {
+			newConfig.Financial.GrowthDeclineReferencePerson = config.IncomeRequirements.ReferencePerson
+		} else if config.Simulation.ReferencePerson != "" {
+			newConfig.Financial.GrowthDeclineReferencePerson = config.Simulation.ReferencePerson
+		}
+	}
+
 	// Disable depletion mode in the cloned config to use fixed mode in simulation
 	newConfig.IncomeRequirements.TargetDepletionAge = 0
 

@@ -42,11 +42,11 @@
 # See default-config.yaml for all available options with detailed comments.
 
 people:
-    - name: Person1
-      birth_date: "1970-12-15"
+    - name: James
+      birth_date: "1971-07-15"
       retirement_age: 55
       state_pension_age: 67
-      tax_free_savings: 100000
+      tax_free_savings: 110000
       pension: 900000
       isa_annual_limit: 20000
       db_pension_amount: 0
@@ -61,15 +61,15 @@ people:
       part_time_income: 0
       part_time_start_age: 55
       part_time_end_age: 60
-    - name: Person2
+    - name: Delphine
       birth_date: "1975-01-13"
       retirement_age: 57
       state_pension_age: 67
       tax_free_savings: 300000
-      pension: 75000
+      pension: 100000
       isa_annual_limit: 20000
       db_pension_amount: 5000
-      db_pension_start_age: 67
+      db_pension_start_age: 57
       db_pension_name: Teachers Pension
       db_pension_normal_age: 65
       db_pension_early_factor: 0.04
@@ -82,7 +82,7 @@ people:
       part_time_end_age: 60
 financial:
     pension_growth_rate: 0.08
-    savings_growth_rate: 0.08
+    savings_growth_rate: 0.06
     income_inflation_rate: 0.03
     state_pension_amount: 12570
     state_pension_inflation: 0.03
@@ -90,12 +90,19 @@ financial:
     state_pension_deferral_rate: 0
     emergency_fund_months: 0
     emergency_fund_inflation_adjust: false
+    growth_decline_enabled: true
+    pension_growth_end_rate: 0.04
+    savings_growth_end_rate: 0.04
+    growth_decline_target_age: 80
+    growth_decline_reference_person: ""
+    depletion_growth_decline_enabled: true
+    depletion_growth_decline_percent: 0.03
 income_requirements:
-    monthly_before_age: 7000
-    monthly_after_age: 4000
-    target_depletion_age: 0
-    income_ratio_phase1: 0
-    income_ratio_phase2: 0
+    monthly_before_age: 0
+    monthly_after_age: 0
+    target_depletion_age: 80
+    income_ratio_phase1: 5
+    income_ratio_phase2: 3
     guardrails_enabled: false
     guardrails_upper_limit: 1.2
     guardrails_lower_limit: 0.8
@@ -104,7 +111,7 @@ income_requirements:
     vpw_floor: 0
     vpw_ceiling: 0
     age_threshold: 67
-    reference_person: Person1
+    reference_person: James
 mortgage:
     parts:
         - name: House
@@ -115,22 +122,22 @@ mortgage:
           start_year: 2006
         - name: Boat
           principal: 45000
-          interest_rate: 0.038900000000000004
+          interest_rate: 0.0369
           is_repayment: true
           term_years: 6
-          start_year: 2026
-    end_year: 2032
-    early_payoff_year: 2026
+          start_year: 2021
+    end_year: 2031
+    early_payoff_year: 2029
 simulation:
     start_year: 2026
-    end_age: 95
-    reference_person: Person1
+    end_age: 90
+    reference_person: James
 sensitivity:
-    pension_growth_min: 0.04
-    pension_growth_max: 0.12
-    savings_growth_min: 0.04
-    savings_growth_max: 0.12
-    step_size: 0.01
+    pension_growth_min: 0
+    pension_growth_max: 0
+    savings_growth_min: 0
+    savings_growth_max: 0
+    step_size: 0
 strategy:
     maximize_couple_isa: null
 tax_bands:

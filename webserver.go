@@ -51,6 +51,20 @@ type APISimulationResponse struct {
 	Error   string              `json:"error,omitempty"`
 	Results []APIResultSummary  `json:"results,omitempty"`
 	Best    *APIResultSummary   `json:"best,omitempty"`
+	// Growth decline info (if enabled)
+	GrowthDecline *GrowthDeclineInfo `json:"growth_decline,omitempty"`
+}
+
+// GrowthDeclineInfo describes how growth rates decline over time
+type GrowthDeclineInfo struct {
+	Enabled          bool    `json:"enabled"`
+	PensionStartRate float64 `json:"pension_start_rate"`
+	PensionEndRate   float64 `json:"pension_end_rate"`
+	SavingsStartRate float64 `json:"savings_start_rate"`
+	SavingsEndRate   float64 `json:"savings_end_rate"`
+	StartYear        int     `json:"start_year"`
+	EndYear          int     `json:"end_year"`
+	ReferencePerson  string  `json:"reference_person"`
 }
 
 // APIResultSummary is a simplified simulation result for API responses
@@ -1013,9 +1027,10 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 	}
 
 	return APISimulationResponse{
-		Success: true,
-		Results: results,
-		Best:    bestResult,
+		Success:       true,
+		Results:       results,
+		Best:          bestResult,
+		GrowthDecline: buildGrowthDeclineInfo(config),
 	}
 }
 
@@ -1048,9 +1063,10 @@ func (ws *WebServer) runDepletionSimulation(config *Config) APISimulationRespons
 	}
 
 	return APISimulationResponse{
-		Success: true,
-		Results: results,
-		Best:    bestResult,
+		Success:       true,
+		Results:       results,
+		Best:          bestResult,
+		GrowthDecline: buildGrowthDeclineInfo(config),
 	}
 }
 
@@ -1085,9 +1101,10 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config) APISimulationRespo
 	}
 
 	return APISimulationResponse{
-		Success: true,
-		Results: results,
-		Best:    bestResult,
+		Success:       true,
+		Results:       results,
+		Best:          bestResult,
+		GrowthDecline: buildGrowthDeclineInfo(config),
 	}
 }
 
@@ -1122,9 +1139,10 @@ func (ws *WebServer) runPensionToISASimulation(config *Config) APISimulationResp
 	}
 
 	return APISimulationResponse{
-		Success: true,
-		Results: results,
-		Best:    bestResult,
+		Success:       true,
+		Results:       results,
+		Best:          bestResult,
+		GrowthDecline: buildGrowthDeclineInfo(config),
 	}
 }
 
@@ -1138,6 +1156,86 @@ func calculateFinalISA(result SimulationResult) float64 {
 		}
 	}
 	return total
+}
+
+// buildGrowthDeclineInfo extracts growth decline information from config
+func buildGrowthDeclineInfo(config *Config) *GrowthDeclineInfo {
+	// Helper to extract birth year from date string (YYYY-MM-DD)
+	getBirthYear := func(dateStr string) int {
+		if len(dateStr) >= 4 {
+			var year int
+			fmt.Sscanf(dateStr, "%d", &year)
+			return year
+		}
+		return 0
+	}
+
+	// Check for standard growth decline
+	if config.Financial.GrowthDeclineEnabled {
+		// Calculate end year based on target age and reference person
+		refPerson := config.Financial.GrowthDeclineReferencePerson
+		if refPerson == "" {
+			refPerson = config.Simulation.ReferencePerson
+		}
+
+		// Find reference person's birth year
+		var birthYear int
+		for _, p := range config.People {
+			if p.Name == refPerson || (refPerson == "" && birthYear == 0) {
+				birthYear = getBirthYear(p.BirthDate)
+			}
+		}
+
+		endYear := birthYear + config.Financial.GrowthDeclineTargetAge
+		if endYear <= config.Simulation.StartYear {
+			endYear = config.Simulation.StartYear + 20 // fallback
+		}
+
+		return &GrowthDeclineInfo{
+			Enabled:          true,
+			PensionStartRate: config.Financial.PensionGrowthRate,
+			PensionEndRate:   config.Financial.PensionGrowthEndRate,
+			SavingsStartRate: config.Financial.SavingsGrowthRate,
+			SavingsEndRate:   config.Financial.SavingsGrowthEndRate,
+			StartYear:        config.Simulation.StartYear,
+			EndYear:          endYear,
+			ReferencePerson:  refPerson,
+		}
+	}
+
+	// Check for depletion-specific growth decline (will be applied in cloneConfigWithMultiplier)
+	if config.Financial.DepletionGrowthDeclineEnabled && config.IncomeRequirements.TargetDepletionAge > 0 {
+		// Find reference person's birth year
+		refPerson := config.IncomeRequirements.ReferencePerson
+		if refPerson == "" {
+			refPerson = config.Simulation.ReferencePerson
+		}
+
+		var birthYear int
+		for _, p := range config.People {
+			if p.Name == refPerson || (refPerson == "" && birthYear == 0) {
+				birthYear = getBirthYear(p.BirthDate)
+			}
+		}
+
+		endYear := birthYear + config.IncomeRequirements.TargetDepletionAge
+		if endYear <= config.Simulation.StartYear {
+			endYear = config.Simulation.StartYear + 20 // fallback
+		}
+
+		return &GrowthDeclineInfo{
+			Enabled:          true,
+			PensionStartRate: config.Financial.PensionGrowthRate,
+			PensionEndRate:   config.Financial.PensionGrowthRate - config.Financial.DepletionGrowthDeclinePercent,
+			SavingsStartRate: config.Financial.SavingsGrowthRate,
+			SavingsEndRate:   config.Financial.SavingsGrowthRate - config.Financial.DepletionGrowthDeclinePercent,
+			StartYear:        config.Simulation.StartYear,
+			EndYear:          endYear,
+			ReferencePerson:  refPerson,
+		}
+	}
+
+	return nil // No growth decline
 }
 
 // convertToAPISummary converts a SimulationResult to API format
@@ -1429,6 +1527,9 @@ const webUIHTML = `<!DOCTYPE html>
             margin-bottom: 0.15rem;
             text-transform: uppercase;
             letter-spacing: 0.3px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         .form-group input, .form-group select {
             width: 100%;
@@ -1443,8 +1544,49 @@ const webUIHTML = `<!DOCTYPE html>
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
         }
-        .form-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.4rem; }
-        .form-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+        .form-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; align-items: start; }
+        .form-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; align-items: start; }
+        .form-row-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; align-items: start; }
+        @media (max-width: 600px) {
+            .form-row-3, .form-row-4 { grid-template-columns: repeat(2, 1fr); }
+        }
+        .form-hint {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            margin-top: 0.2rem;
+            line-height: 1.3;
+        }
+        .form-section {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+        .form-section-title {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text);
+            text-transform: none;
+            letter-spacing: 0;
+            white-space: normal;
+            cursor: pointer;
+        }
+        .checkbox-label input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+        }
         /* Tooltip styling for abbreviations */
         abbr[title] {
             text-decoration: underline dotted;
@@ -2073,85 +2215,101 @@ const webUIHTML = `<!DOCTYPE html>
                                     <input type="date" id="p1-birth" value="1970-12-15">
                                 </div>
                             </div>
-                            <div class="form-row-3">
+                            <div class="form-row-4">
                                 <div class="form-group">
-                                    <label>Retirement Age</label>
+                                    <label>Retire Age</label>
                                     <input type="number" id="p1-retire" value="55">
                                 </div>
                                 <div class="form-group">
-                                    <label>State Pension Age</label>
+                                    <label>SP Age</label>
                                     <input type="number" id="p1-spa" value="67">
+                                    <div class="form-hint">State pension</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Pension Pot</label>
+                                    <label>Pension</label>
                                     <input type="text" id="p1-pension" value="500000">
+                                    <div class="form-hint">DC pot</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>ISA</label>
+                                    <input type="text" id="p1-isa" value="100000">
+                                    <div class="form-hint">Tax-free</div>
                                 </div>
                             </div>
-                            <div class="form-group">
-                                <label><abbr title="Individual Savings Account - Tax-free savings wrapper">ISA</abbr> / Tax-Free Savings</label>
-                                <input type="text" id="p1-isa" value="100000">
-                            </div>
-                            <div class="form-row-3">
+                            <div class="form-row-4">
                                 <div class="form-group">
-                                    <label><abbr title="Defined Benefit Pension - Guaranteed pension based on salary and years of service">DB Pension</abbr> Name</label>
+                                    <label>DB Name</label>
                                     <input type="text" id="p1-db-name" value="">
+                                    <div class="form-hint">e.g. Teachers</div>
                                 </div>
                                 <div class="form-group">
-                                    <label><abbr title="Defined Benefit Pension - Guaranteed pension based on salary and years of service">DB Pension</abbr> (Annual)</label>
+                                    <label>DB Amount</label>
                                     <input type="text" id="p1-db-amount" value="0">
+                                    <div class="form-hint">Annual</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>DB Start Age</label>
+                                    <label>DB Age</label>
                                     <input type="number" id="p1-db-age" value="67">
+                                    <div class="form-hint">Start age</div>
                                 </div>
-                            </div>
-                            <div class="form-group">
-                                <label><abbr title="Individual Savings Account - Tax-free savings wrapper">ISA</abbr> Annual Limit</label>
-                                <input type="text" id="p1-isa-limit" value="20000">
+                                <div class="form-group">
+                                    <label>ISA Limit</label>
+                                    <input type="text" id="p1-isa-limit" value="20000">
+                                    <div class="form-hint">Annual</div>
+                                </div>
                             </div>
                             <details class="advanced-options">
                                 <summary>Advanced Options</summary>
-                                <div class="form-group">
-                                    <label>State Pension Defer Years</label>
-                                    <input type="number" id="p1-sp-defer" value="0" min="0" max="10" title="Years to defer state pension (5.8% increase per year)">
-                                </div>
-                                <div class="form-row-3">
+                                <div class="form-row-4">
                                     <div class="form-group">
-                                        <label>DB Normal Age</label>
-                                        <input type="number" id="p1-db-normal-age" value="65" title="Normal retirement age for DB pension">
+                                        <label>SP Defer</label>
+                                        <input type="number" id="p1-sp-defer" value="0" min="0" max="10">
+                                        <div class="form-hint">Years (5.8%/yr)</div>
                                     </div>
                                     <div class="form-group">
-                                        <label>DB Early Factor (%/yr)</label>
-                                        <input type="number" id="p1-db-early-factor" value="4" step="0.5" title="Reduction per year for taking DB early">
+                                        <label>DB Normal</label>
+                                        <input type="number" id="p1-db-normal-age" value="65">
+                                        <div class="form-hint">NRA age</div>
                                     </div>
                                     <div class="form-group">
-                                        <label>DB Late Factor (%/yr)</label>
-                                        <input type="number" id="p1-db-late-factor" value="5" step="0.5" title="Enhancement per year for taking DB late">
+                                        <label>Early %</label>
+                                        <input type="number" id="p1-db-early-factor" value="4" step="0.5">
+                                        <div class="form-hint">Reduction/yr</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Late %</label>
+                                        <input type="number" id="p1-db-late-factor" value="5" step="0.5">
+                                        <div class="form-hint">Increase/yr</div>
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label>DB Commutation (%)</label>
-                                        <input type="number" id="p1-db-commute" value="0" min="0" max="25" title="% of DB to take as tax-free lump sum (0-25%)">
+                                        <label>Commute %</label>
+                                        <input type="number" id="p1-db-commute" value="0" min="0" max="25">
+                                        <div class="form-hint">DB lump sum</div>
                                     </div>
                                     <div class="form-group">
-                                        <label>Commute Factor</label>
-                                        <input type="number" id="p1-db-commute-factor" value="12" title="Lump sum = factor × annual pension given up">
+                                        <label>Factor</label>
+                                        <input type="number" id="p1-db-commute-factor" value="12">
+                                        <div class="form-hint">Commute factor</div>
                                     </div>
                                 </div>
-                                <h4 style="margin: 0.5rem 0 0.25rem; font-size: 0.7rem; color: var(--text-muted);">Phased Retirement</h4>
+                                <div class="form-section-title" style="margin-top: 0.5rem;">Phased Retirement</div>
                                 <div class="form-row-3">
-                                    <div class="form-group">
-                                        <label>Part-time Income</label>
-                                        <input type="text" id="p1-parttime-income" value="0" title="Annual part-time income">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Income</label>
+                                        <input type="text" id="p1-parttime-income" value="0">
+                                        <div class="form-hint">Annual</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>Start Age</label>
-                                        <input type="number" id="p1-parttime-start" value="55" title="Age part-time work begins">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Start</label>
+                                        <input type="number" id="p1-parttime-start" value="55">
+                                        <div class="form-hint">Age</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>End Age</label>
-                                        <input type="number" id="p1-parttime-end" value="60" title="Age part-time work ends">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>End</label>
+                                        <input type="number" id="p1-parttime-end" value="60">
+                                        <div class="form-hint">Age</div>
                                     </div>
                                 </div>
                             </details>
@@ -2168,85 +2326,101 @@ const webUIHTML = `<!DOCTYPE html>
                                     <input type="date" id="p2-birth" value="1975-01-13">
                                 </div>
                             </div>
-                            <div class="form-row-3">
+                            <div class="form-row-4">
                                 <div class="form-group">
-                                    <label>Retirement Age</label>
+                                    <label>Retire Age</label>
                                     <input type="number" id="p2-retire" value="57">
                                 </div>
                                 <div class="form-group">
-                                    <label>State Pension Age</label>
+                                    <label>SP Age</label>
                                     <input type="number" id="p2-spa" value="67">
+                                    <div class="form-hint">State pension</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Pension Pot</label>
+                                    <label>Pension</label>
                                     <input type="text" id="p2-pension" value="500000">
+                                    <div class="form-hint">DC pot</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>ISA</label>
+                                    <input type="text" id="p2-isa" value="100000">
+                                    <div class="form-hint">Tax-free</div>
                                 </div>
                             </div>
-                            <div class="form-group">
-                                <label><abbr title="Individual Savings Account - Tax-free savings wrapper">ISA</abbr> / Tax-Free Savings</label>
-                                <input type="text" id="p2-isa" value="100000">
-                            </div>
-                            <div class="form-row-3">
+                            <div class="form-row-4">
                                 <div class="form-group">
-                                    <label><abbr title="Defined Benefit Pension - Guaranteed pension based on salary and years of service">DB Pension</abbr> Name</label>
+                                    <label>DB Name</label>
                                     <input type="text" id="p2-db-name" value="Government Pension">
+                                    <div class="form-hint">e.g. Teachers</div>
                                 </div>
                                 <div class="form-group">
-                                    <label><abbr title="Defined Benefit Pension - Guaranteed pension based on salary and years of service">DB Pension</abbr> (Annual)</label>
+                                    <label>DB Amount</label>
                                     <input type="text" id="p2-db-amount" value="400">
+                                    <div class="form-hint">Annual</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>DB Start Age</label>
+                                    <label>DB Age</label>
                                     <input type="number" id="p2-db-age" value="57">
+                                    <div class="form-hint">Start age</div>
                                 </div>
-                            </div>
-                            <div class="form-group">
-                                <label><abbr title="Individual Savings Account - Tax-free savings wrapper">ISA</abbr> Annual Limit</label>
-                                <input type="text" id="p2-isa-limit" value="20000">
+                                <div class="form-group">
+                                    <label>ISA Limit</label>
+                                    <input type="text" id="p2-isa-limit" value="20000">
+                                    <div class="form-hint">Annual</div>
+                                </div>
                             </div>
                             <details class="advanced-options">
                                 <summary>Advanced Options</summary>
-                                <div class="form-group">
-                                    <label>State Pension Defer Years</label>
-                                    <input type="number" id="p2-sp-defer" value="0" min="0" max="10" title="Years to defer state pension (5.8% increase per year)">
-                                </div>
-                                <div class="form-row-3">
+                                <div class="form-row-4">
                                     <div class="form-group">
-                                        <label>DB Normal Age</label>
-                                        <input type="number" id="p2-db-normal-age" value="65" title="Normal retirement age for DB pension">
+                                        <label>SP Defer</label>
+                                        <input type="number" id="p2-sp-defer" value="0" min="0" max="10">
+                                        <div class="form-hint">Years (5.8%/yr)</div>
                                     </div>
                                     <div class="form-group">
-                                        <label>DB Early Factor (%/yr)</label>
-                                        <input type="number" id="p2-db-early-factor" value="4" step="0.5" title="Reduction per year for taking DB early">
+                                        <label>DB Normal</label>
+                                        <input type="number" id="p2-db-normal-age" value="65">
+                                        <div class="form-hint">NRA age</div>
                                     </div>
                                     <div class="form-group">
-                                        <label>DB Late Factor (%/yr)</label>
-                                        <input type="number" id="p2-db-late-factor" value="5" step="0.5" title="Enhancement per year for taking DB late">
+                                        <label>Early %</label>
+                                        <input type="number" id="p2-db-early-factor" value="4" step="0.5">
+                                        <div class="form-hint">Reduction/yr</div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Late %</label>
+                                        <input type="number" id="p2-db-late-factor" value="5" step="0.5">
+                                        <div class="form-hint">Increase/yr</div>
                                     </div>
                                 </div>
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label>DB Commutation (%)</label>
-                                        <input type="number" id="p2-db-commute" value="0" min="0" max="25" title="% of DB to take as tax-free lump sum (0-25%)">
+                                        <label>Commute %</label>
+                                        <input type="number" id="p2-db-commute" value="0" min="0" max="25">
+                                        <div class="form-hint">DB lump sum</div>
                                     </div>
                                     <div class="form-group">
-                                        <label>Commute Factor</label>
-                                        <input type="number" id="p2-db-commute-factor" value="12" title="Lump sum = factor × annual pension given up">
+                                        <label>Factor</label>
+                                        <input type="number" id="p2-db-commute-factor" value="12">
+                                        <div class="form-hint">Commute factor</div>
                                     </div>
                                 </div>
-                                <h4 style="margin: 0.5rem 0 0.25rem; font-size: 0.7rem; color: var(--text-muted);">Phased Retirement</h4>
+                                <div class="form-section-title" style="margin-top: 0.5rem;">Phased Retirement</div>
                                 <div class="form-row-3">
-                                    <div class="form-group">
-                                        <label>Part-time Income</label>
-                                        <input type="text" id="p2-parttime-income" value="0" title="Annual part-time income">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Income</label>
+                                        <input type="text" id="p2-parttime-income" value="0">
+                                        <div class="form-hint">Annual</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>Start Age</label>
-                                        <input type="number" id="p2-parttime-start" value="55" title="Age part-time work begins">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Start</label>
+                                        <input type="number" id="p2-parttime-start" value="55">
+                                        <div class="form-hint">Age</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>End Age</label>
-                                        <input type="number" id="p2-parttime-end" value="60" title="Age part-time work ends">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>End</label>
+                                        <input type="number" id="p2-parttime-end" value="60">
+                                        <div class="form-hint">Age</div>
                                     </div>
                                 </div>
                             </details>
@@ -2261,28 +2435,47 @@ const webUIHTML = `<!DOCTYPE html>
                         <div id="fixed-income-fields">
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>Monthly (Before Age Threshold)</label>
+                                    <label>Monthly Before</label>
                                     <input type="text" id="income-before" value="4000">
+                                    <div class="form-hint">Before age threshold</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Monthly (After Age Threshold)</label>
+                                    <label>Monthly After</label>
                                     <input type="text" id="income-after" value="2500">
+                                    <div class="form-hint">After age threshold</div>
                                 </div>
                             </div>
                         </div>
                         <div id="depletion-fields" class="hidden">
                             <div class="form-row-3">
                                 <div class="form-group">
-                                    <label>Target Depletion Age (funds run out)</label>
+                                    <label>Depletion Age</label>
                                     <input type="number" id="depletion-age" value="80">
+                                    <div class="form-hint">Funds run out</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Income Ratio Phase 1</label>
+                                    <label>Ratio Phase 1</label>
                                     <input type="number" id="ratio-phase1" value="5" step="0.5">
+                                    <div class="form-hint">Before threshold</div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Income Ratio Phase 2</label>
+                                    <label>Ratio Phase 2</label>
                                     <input type="number" id="ratio-phase2" value="3" step="0.5">
+                                    <div class="form-hint">After threshold</div>
+                                </div>
+                            </div>
+                            <div class="form-section">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="depletion-growth-decline-enabled">
+                                    Growth Rate Decline
+                                </label>
+                                <div class="form-hint" style="margin-bottom: 0.5rem;">Rates decline linearly to depletion age</div>
+                                <div class="form-row">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Decline %</label>
+                                        <input type="number" id="depletion-growth-decline-percent" value="3" step="0.5" min="0" max="10">
+                                        <div class="form-hint">e.g. 3%: 7%→4%</div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -2290,6 +2483,7 @@ const webUIHTML = `<!DOCTYPE html>
                             <div class="form-group">
                                 <label>Age Threshold</label>
                                 <input type="number" id="age-threshold" value="67">
+                                <div class="form-hint">Income changes at</div>
                             </div>
                             <div class="form-group">
                                 <label>Reference Person</label>
@@ -2304,75 +2498,74 @@ const webUIHTML = `<!DOCTYPE html>
 
                 <!-- Income Strategies -->
                 <div class="card">
-                    <h2 class="collapsible collapsed">Income Strategies ✨</h2>
+                    <h2 class="collapsible collapsed">Income Strategies</h2>
                     <div class="collapse-content collapsed">
-                        <p style="font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem;">
-                            Advanced income strategies adjust withdrawals dynamically based on portfolio performance and age.
-                        </p>
+                        <div class="form-hint" style="margin-bottom: 0.75rem;">Dynamic withdrawal adjustments based on portfolio performance and age</div>
 
                         <!-- Guardrails Strategy -->
-                        <div style="border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; margin-bottom: 0.5rem;">
-                            <div style="margin-bottom: 0.25rem;">
-                                <label style="display: flex; align-items: center; gap: 0.25rem;">
-                                    <input type="checkbox" id="guardrails-enabled"> Enable Guardrails
-                                </label>
-                            </div>
-                            <div style="font-size: 0.65rem; color: var(--text-muted); margin-left: 1.25rem;">
-                                Guyton-Klinger: Adjust withdrawals when portfolio drifts from initial rate
-                            </div>
-                            <div id="guardrails-options" class="hidden">
+                        <div class="form-section">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="guardrails-enabled">
+                                Guardrails (Guyton-Klinger)
+                            </label>
+                            <div class="form-hint">Adjust withdrawals when portfolio drifts from initial rate</div>
+                            <div id="guardrails-options" class="hidden" style="margin-top: 0.5rem;">
                                 <div class="form-row-3">
-                                    <div class="form-group">
-                                        <label>Upper Limit (%)</label>
-                                        <input type="number" id="guardrails-upper" value="120" step="5" title="Reduce withdrawal if rate exceeds this % of initial">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Upper %</label>
+                                        <input type="number" id="guardrails-upper" value="120" step="5">
+                                        <div class="form-hint">Reduce if above</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>Lower Limit (%)</label>
-                                        <input type="number" id="guardrails-lower" value="80" step="5" title="Increase withdrawal if rate falls below this % of initial">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Lower %</label>
+                                        <input type="number" id="guardrails-lower" value="80" step="5">
+                                        <div class="form-hint">Increase if below</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>Adjustment (%)</label>
-                                        <input type="number" id="guardrails-adjust" value="10" step="5" title="How much to adjust when guardrails triggered">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Adjust %</label>
+                                        <input type="number" id="guardrails-adjust" value="10" step="5">
+                                        <div class="form-hint">Adjustment amount</div>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- VPW Strategy -->
-                        <div style="border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem; margin-bottom: 0.5rem;">
-                            <div style="margin-bottom: 0.25rem;">
-                                <label style="display: flex; align-items: center; gap: 0.25rem;">
-                                    <input type="checkbox" id="vpw-enabled"> Enable <abbr title="Variable Percentage Withdrawal - Withdrawal rate that increases with age based on life expectancy tables">VPW</abbr>
-                                </label>
-                            </div>
-                            <div style="font-size: 0.65rem; color: var(--text-muted); margin-left: 1.25rem;">
-                                Variable Percentage Withdrawal: Rate increases with age (3% at 55 → 35% at 100)
-                            </div>
-                            <div id="vpw-options" class="hidden">
+                        <div class="form-section">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="vpw-enabled">
+                                VPW (Variable Percentage)
+                            </label>
+                            <div class="form-hint">Rate increases with age: 3% at 55 → 35% at 100</div>
+                            <div id="vpw-options" class="hidden" style="margin-top: 0.5rem;">
                                 <div class="form-row">
-                                    <div class="form-group">
-                                        <label>Floor (min annual)</label>
-                                        <input type="text" id="vpw-floor" value="0" title="Minimum annual withdrawal (0 = no floor)">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Floor</label>
+                                        <input type="text" id="vpw-floor" value="0">
+                                        <div class="form-hint">Min annual (0=none)</div>
                                     </div>
-                                    <div class="form-group">
-                                        <label>Ceiling (× floor)</label>
-                                        <input type="number" id="vpw-ceiling" value="0" step="0.1" title="Max withdrawal as multiple of floor (0 = no ceiling)">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Ceiling</label>
+                                        <input type="number" id="vpw-ceiling" value="0" step="0.1">
+                                        <div class="form-hint">× floor (0=none)</div>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Emergency Fund -->
-                        <div style="border: 1px solid var(--border); border-radius: 4px; padding: 0.5rem;">
-                            <h4 style="font-size: 0.7rem; margin-bottom: 0.25rem;">Emergency Fund Protection</h4>
+                        <div class="form-section" style="margin-bottom: 0;">
+                            <div class="form-section-title">Emergency Fund</div>
                             <div class="form-row">
-                                <div class="form-group">
-                                    <label>Min <abbr title="Individual Savings Account - Tax-free savings wrapper">ISA</abbr> Reserve (months)</label>
-                                    <input type="number" id="emergency-months" value="0" min="0" max="24" title="Minimum months of expenses to preserve in ISA">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label>ISA Reserve</label>
+                                    <input type="number" id="emergency-months" value="0" min="0" max="24">
+                                    <div class="form-hint">Months to preserve</div>
                                 </div>
-                                <div class="form-group">
-                                    <label style="display: flex; align-items: center; gap: 0.25rem; margin-top: 1rem;">
-                                        <input type="checkbox" id="emergency-inflate"> Inflation Adjust
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label class="checkbox-label" style="margin-top: 1.2rem;">
+                                        <input type="checkbox" id="emergency-inflate">
+                                        Inflation Adjust
                                     </label>
                                 </div>
                             </div>
@@ -2384,51 +2577,85 @@ const webUIHTML = `<!DOCTYPE html>
                 <div class="card">
                     <h2 class="collapsible collapsed">Financial Settings</h2>
                     <div class="collapse-content collapsed">
-                        <div class="form-row">
+                        <div class="form-row-4">
                             <div class="form-group">
-                                <label>Pension Growth Rate (%)</label>
+                                <label>Pension %</label>
                                 <input type="number" id="pension-growth" value="5" step="0.5">
+                                <div class="form-hint">Growth rate</div>
                             </div>
                             <div class="form-group">
-                                <label>Savings Growth Rate (%)</label>
+                                <label>ISA %</label>
                                 <input type="number" id="savings-growth" value="5" step="0.5">
+                                <div class="form-hint">Growth rate</div>
                             </div>
-                        </div>
-                        <div class="form-row">
                             <div class="form-group">
-                                <label>Income Inflation (%)</label>
+                                <label>Inflation %</label>
                                 <input type="number" id="income-inflation" value="3" step="0.5">
+                                <div class="form-hint">Income needs</div>
                             </div>
                             <div class="form-group">
-                                <label>State Pension (Annual)</label>
-                                <input type="text" id="state-pension" value="12547.60">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>State Pension Inflation (%)</label>
+                                <label>SP Inflation %</label>
                                 <input type="number" id="sp-inflation" value="3" step="0.5">
-                            </div>
-                        </div>
-                        <h3 style="margin: 0.5rem 0 0.25rem; font-size: 0.75rem; color: var(--text-muted);">Growth Rate Ranges</h3>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Pension Growth Min (%)</label>
-                                <input type="number" id="pension-growth-min" value="4" step="1">
-                            </div>
-                            <div class="form-group">
-                                <label>Pension Growth Max (%)</label>
-                                <input type="number" id="pension-growth-max" value="12" step="1">
+                                <div class="form-hint">State pension</div>
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Savings Growth Min (%)</label>
-                                <input type="number" id="savings-growth-min" value="4" step="1">
+                                <label>State Pension</label>
+                                <input type="text" id="state-pension" value="12547.60">
+                                <div class="form-hint">Annual amount</div>
                             </div>
-                            <div class="form-group">
-                                <label>Savings Growth Max (%)</label>
-                                <input type="number" id="savings-growth-max" value="12" step="1">
+                        </div>
+
+                        <div class="form-section">
+                            <div class="form-section-title">Sensitivity Ranges</div>
+                            <div class="form-row-4">
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label>Pen Min %</label>
+                                    <input type="number" id="pension-growth-min" value="4" step="1">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label>Pen Max %</label>
+                                    <input type="number" id="pension-growth-max" value="12" step="1">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label>ISA Min %</label>
+                                    <input type="number" id="savings-growth-min" value="4" step="1">
+                                </div>
+                                <div class="form-group" style="margin-bottom: 0;">
+                                    <label>ISA Max %</label>
+                                    <input type="number" id="savings-growth-max" value="12" step="1">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section" style="margin-bottom: 0;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="growth-decline-enabled">
+                                Gradual Growth Decline
+                            </label>
+                            <div class="form-hint">Age in bonds: rates decline linearly to target age</div>
+                            <div id="growth-decline-fields" style="display: none; margin-top: 0.5rem;">
+                                <div class="form-row-4">
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Pen End %</label>
+                                        <input type="number" id="pension-growth-end" value="4" step="0.5">
+                                    </div>
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>ISA End %</label>
+                                        <input type="number" id="savings-growth-end" value="4" step="0.5">
+                                    </div>
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Target Age</label>
+                                        <input type="number" id="growth-decline-target-age" value="80">
+                                    </div>
+                                    <div class="form-group" style="margin-bottom: 0;">
+                                        <label>Ref Person</label>
+                                        <select id="growth-decline-ref-person">
+                                            <option value="">Same as sim</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -2442,8 +2669,9 @@ const webUIHTML = `<!DOCTYPE html>
                         <button type="button" class="btn" onclick="addMortgagePart()" style="margin-top: 0.25rem;">+ Add Mortgage</button>
                         <div class="form-row" style="margin-top: 0.5rem;">
                             <div class="form-group">
-                                <label>Early Payoff Year (all parts)</label>
+                                <label>Early Payoff Year</label>
                                 <input type="number" id="mortgage-early" value="2028">
+                                <div class="form-hint">All parts</div>
                             </div>
                         </div>
                     </div>
@@ -2459,24 +2687,24 @@ const webUIHTML = `<!DOCTYPE html>
                                 <input type="number" id="sim-start" value="2026">
                             </div>
                             <div class="form-group">
-                                <label>Sim End Age (display to)</label>
+                                <label>End Age</label>
                                 <input type="number" id="sim-end" value="90">
+                                <div class="form-hint">Display to</div>
                             </div>
                             <div class="form-group">
-                                <label>Simulation Reference</label>
+                                <label>Ref Person</label>
                                 <select id="sim-ref-person">
                                     <option value="Person1">Person1</option>
                                     <option value="Person2">Person2</option>
                                 </select>
                             </div>
                         </div>
-                        <div class="form-row" style="margin-top: 1rem;">
-                            <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.5rem;">
+                        <div style="margin-top: 0.5rem;">
+                            <label class="checkbox-label">
                                 <input type="checkbox" id="maximize-couple-isa" checked>
-                                <label for="maximize-couple-isa" style="margin: 0;" title="For Pension→ISA strategy: Use one person's pension to fill both ISA allowances (£40k total for couples)">
-                                    Maximize couple ISA transfers
-                                </label>
-                            </div>
+                                Maximize couple ISA transfers
+                            </label>
+                            <div class="form-hint">Pen→ISA: fill both ISA allowances (£40k/yr)</div>
                         </div>
                     </div>
                 </div>
@@ -2788,6 +3016,11 @@ const webUIHTML = `<!DOCTYPE html>
             document.getElementById('vpw-options').classList.toggle('hidden', !this.checked);
         });
 
+        // Growth decline toggle
+        document.getElementById('growth-decline-enabled').addEventListener('change', function() {
+            document.getElementById('growth-decline-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
         // Parse money value (handles k, m suffixes)
         function parseMoney(val) {
             if (!val) return 0;
@@ -2946,7 +3179,14 @@ const webUIHTML = `<!DOCTYPE html>
                     state_pension_inflation: parseFloat(document.getElementById('sp-inflation').value) / 100,
                     tax_band_inflation: 0.03,  // 3% annual tax band inflation
                     emergency_fund_months: parseInt(document.getElementById('emergency-months').value) || 0,
-                    emergency_fund_inflation_adjust: document.getElementById('emergency-inflate').checked
+                    emergency_fund_inflation_adjust: document.getElementById('emergency-inflate').checked,
+                    growth_decline_enabled: document.getElementById('growth-decline-enabled').checked,
+                    pension_growth_end_rate: parseFloat(document.getElementById('pension-growth-end').value) / 100,
+                    savings_growth_end_rate: parseFloat(document.getElementById('savings-growth-end').value) / 100,
+                    growth_decline_target_age: parseInt(document.getElementById('growth-decline-target-age').value) || 80,
+                    growth_decline_reference_person: document.getElementById('growth-decline-ref-person').value,
+                    depletion_growth_decline_enabled: document.getElementById('depletion-growth-decline-enabled').checked,
+                    depletion_growth_decline_percent: parseFloat(document.getElementById('depletion-growth-decline-percent').value) / 100 || 0.03
                 },
                 income_requirements: {
                     monthly_before_age: isDepletion ? 0 : parseMoney(document.getElementById('income-before').value),
@@ -3257,6 +3497,24 @@ const webUIHTML = `<!DOCTYPE html>
             }
 
             html += '</div>';
+
+            // Growth decline indicator
+            if (data.growth_decline && data.growth_decline.enabled) {
+                const gd = data.growth_decline;
+                const penStart = (gd.pension_start_rate * 100).toFixed(1);
+                const penEnd = (gd.pension_end_rate * 100).toFixed(1);
+                const savStart = (gd.savings_start_rate * 100).toFixed(1);
+                const savEnd = (gd.savings_end_rate * 100).toFixed(1);
+                html += '<div class="growth-decline-indicator" style="background:var(--bg-darker);border:1px solid var(--border);border-radius:6px;padding:0.5rem 0.75rem;margin-bottom:0.75rem;font-size:0.75rem;">';
+                html += '<div style="font-weight:600;margin-bottom:0.25rem;color:var(--text);">📉 Growth Rate Decline Active</div>';
+                html += '<div style="color:var(--text-muted);">';
+                if (penStart === savStart && penEnd === savEnd) {
+                    html += 'Growth: ' + penStart + '% → ' + penEnd + '% (' + gd.start_year + ' to ' + gd.end_year + ')';
+                } else {
+                    html += 'Pension: ' + penStart + '% → ' + penEnd + '% · ISA: ' + savStart + '% → ' + savEnd + '% (' + gd.start_year + ' to ' + gd.end_year + ')';
+                }
+                html += '</div></div>';
+            }
 
             // Strategy accordion
             html += '<div style="display:flex;align-items:center;margin:1rem 0 0.5rem;"><h3 style="margin:0;">All Strategies</h3><span style="font-weight:normal;font-size:0.75rem;color:var(--text-muted);margin-left:0.5rem;">(click to expand, click headers to sort)</span><button class="compare-btn" onclick="showCompareModal()">Compare Early vs Normal vs Extended</button></div>';
@@ -3717,6 +3975,10 @@ const webUIHTML = `<!DOCTYPE html>
                         const select = document.getElementById(id);
                         select.innerHTML = names.map(n => '<option value="' + n + '">' + n + '</option>').join('');
                     });
+                    // Growth decline ref person dropdown (with "Same as simulation" option)
+                    const growthDeclineRefSelect = document.getElementById('growth-decline-ref-person');
+                    growthDeclineRefSelect.innerHTML = '<option value="">Same as simulation</option>' +
+                        names.map(n => '<option value="' + n + '">' + n + '</option>').join('');
                 }
 
                 // Load income requirements
@@ -3741,6 +4003,18 @@ const webUIHTML = `<!DOCTYPE html>
                     document.getElementById('income-inflation').value = ((fin.income_inflation_rate || 0.03) * 100).toFixed(1);
                     document.getElementById('state-pension').value = fin.state_pension_amount || 12570;
                     document.getElementById('sp-inflation').value = ((fin.state_pension_inflation || 0.03) * 100).toFixed(1);
+                    // Growth decline settings
+                    document.getElementById('growth-decline-enabled').checked = fin.growth_decline_enabled || false;
+                    document.getElementById('pension-growth-end').value = ((fin.pension_growth_end_rate || 0.04) * 100).toFixed(1);
+                    document.getElementById('savings-growth-end').value = ((fin.savings_growth_end_rate || 0.04) * 100).toFixed(1);
+                    document.getElementById('growth-decline-target-age').value = fin.growth_decline_target_age || 80;
+                    if (fin.growth_decline_reference_person) {
+                        document.getElementById('growth-decline-ref-person').value = fin.growth_decline_reference_person;
+                    }
+                    document.getElementById('growth-decline-fields').style.display = fin.growth_decline_enabled ? 'block' : 'none';
+                    // Depletion growth decline settings
+                    document.getElementById('depletion-growth-decline-enabled').checked = fin.depletion_growth_decline_enabled || false;
+                    document.getElementById('depletion-growth-decline-percent').value = ((fin.depletion_growth_decline_percent || 0.03) * 100).toFixed(1);
                 }
 
                 // Load simulation settings

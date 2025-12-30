@@ -128,6 +128,21 @@ func ApplyGrowth(person *Person, savingsRate, pensionRate float64) {
 	person.UncrystallisedPot *= (1 + pensionRate)
 }
 
+// GetGrowthRateForYear calculates linearly declining growth rate based on age
+// Returns endRate if currentAge >= targetAge, startRate if currentAge <= startAge
+// Otherwise linearly interpolates between startRate and endRate
+func GetGrowthRateForYear(startRate, endRate float64, startAge, currentAge, targetAge int) float64 {
+	if currentAge >= targetAge {
+		return endRate
+	}
+	if currentAge <= startAge {
+		return startRate
+	}
+	// Linear interpolation
+	progress := float64(currentAge-startAge) / float64(targetAge-startAge)
+	return startRate + (endRate-startRate)*progress
+}
+
 // ProportionalSplit calculates proportional withdrawal amounts from two people
 func ProportionalSplit(totalNeeded float64, person1Available, person2Available float64) (p1Amount, p2Amount float64) {
 	totalAvailable := person1Available + person2Available

@@ -438,6 +438,9 @@ type YearState struct {
 	// Tax band tracking
 	PersonalAllowance    float64 // Inflated personal allowance for this year
 	BasicRateLimit       float64 // Inflated basic rate limit for this year
+	// Growth rate tracking (for gradual decline feature)
+	PensionGrowthRateUsed float64 // Actual pension growth rate used this year
+	SavingsGrowthRateUsed float64 // Actual ISA growth rate used this year
 }
 
 // SimulationResult holds the complete results of a simulation run
