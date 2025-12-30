@@ -153,11 +153,13 @@ jobs:
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
           cd release
+          # Set execute permissions for Linux and macOS binaries
+          chmod +x *linux* *macos* 2>/dev/null || true
           # Create zip files for each platform
           zip goPensionForecast-linux-amd64.zip *linux-amd64*
-          zip goPensionForecast-windows-amd64.zip *windows-amd64*
           zip goPensionForecast-macos-arm64.zip *macos-arm64*
           zip goPensionForecast-macos-amd64.zip *macos-amd64*
+          zip goPensionForecast-windows-amd64.zip *windows-amd64*
           ls -la
 
       - name: Create Release
