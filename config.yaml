@@ -62,7 +62,7 @@ people:
       part_time_start_age: 55
       part_time_end_age: 60
     - name: Delphine
-      birth_date: "1975-01-13"
+      birth_date: "1973-10-23"
       retirement_age: 57
       state_pension_age: 67
       tax_free_savings: 300000
@@ -81,8 +81,8 @@ people:
       part_time_start_age: 55
       part_time_end_age: 60
 financial:
-    pension_growth_rate: 0.07
-    savings_growth_rate: 0.07
+    pension_growth_rate: 0.06
+    savings_growth_rate: 0.06
     income_inflation_rate: 0.03
     state_pension_amount: 12570
     state_pension_inflation: 0.03
@@ -99,7 +99,7 @@ financial:
     depletion_growth_decline_percent: 0.03
 income_requirements:
     monthly_before_age: 5000
-    monthly_after_age: 3000
+    monthly_after_age: 4000
     target_depletion_age: 0
     income_ratio_phase1: 0
     income_ratio_phase2: 0
@@ -130,7 +130,7 @@ mortgage:
     early_payoff_year: 2029
 simulation:
     start_year: 2026
-    end_age: 90
+    end_age: 100
     reference_person: James
 sensitivity:
     pension_growth_min: 0
@@ -157,3 +157,7 @@ tax_bands:
       lower: 125140
       upper: 1e+07
       rate: 0.45
+tax:
+    personal_allowance: 12570
+    tapering_threshold: 100000
+    tapering_rate: 0.5
