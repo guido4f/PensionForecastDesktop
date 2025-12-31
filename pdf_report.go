@@ -17,9 +17,9 @@ func pdfText(s string) string {
 	return strings.ReplaceAll(s, "£", "\xa3")
 }
 
-// FormatMoneyPDF formats money for PDF output (handles £ encoding)
+// FormatMoneyPDF formats money for PDF output with full amounts and comma separators
 func FormatMoneyPDF(amount float64) string {
-	return pdfText(FormatMoney(amount))
+	return pdfText(formatWithCommas(amount))
 }
 
 // getGrowthDeclineText returns a text description of growth decline, or empty string if not enabled
@@ -131,8 +131,10 @@ type YearActionPlan struct {
 
 // YearSummaryPDF provides totals for the year
 type YearSummaryPDF struct {
+	StartingBalance   float64
 	TotalIncome       float64
 	TotalWithdrawals  float64
+	MortgageCost      float64
 	TotalTaxPaid      float64
 	NetIncomeReceived float64
 	EndingBalance     float64
@@ -478,6 +480,227 @@ func (r *PDFActionPlanReport) addStrategyOverview() {
 		r.pdf.CellFormat(60, 5, row[1], "", 1, "L", false, 0, "")
 		r.pdf.SetTextColor(50, 50, 50)
 	}
+
+	// Year-by-Year Summary Table
+	r.addYearlySummaryTable()
+}
+
+// addYearlySummaryTable adds a compact year-by-year summary table to the Strategy Overview
+func (r *PDFActionPlanReport) addYearlySummaryTable() {
+	if len(r.result.Years) == 0 {
+		return
+	}
+
+	// Check if we need a new page
+	if r.pdf.GetY() > 180 {
+		r.pdf.AddPage()
+	}
+
+	r.pdf.Ln(8)
+	r.pdf.SetFont("Arial", "B", 11)
+	r.pdf.SetTextColor(0, 51, 102)
+	r.pdf.CellFormat(contentWidth, 7, "Year-by-Year Summary", "", 1, "L", false, 0, "")
+
+	// Column widths for table with full GBP amounts (total must be <= 180mm content width)
+	colWidths := []float64{11, 12, 25, 25, 17, 22, 17, 18, 25}
+	headers := []string{"Year", "Ages", "Start", "End", "Monthly", "Net Inc", "Mortg", "Tax", "Growth"}
+
+	// Draw header
+	r.pdf.SetFillColor(0, 51, 102)
+	r.pdf.SetTextColor(255, 255, 255)
+	r.pdf.SetFont("Arial", "B", 7)
+
+	for i, header := range headers {
+		align := "L"
+		if i == 1 { // Ages column centered
+			align = "C"
+		} else if i > 1 {
+			align = "R"
+		}
+		r.pdf.CellFormat(colWidths[i], 5, header, "1", 0, align, true, 0, "")
+	}
+	r.pdf.Ln(-1)
+
+	// Track totals
+	totalNetIncome := 0.0
+	totalMortgage := 0.0
+	totalTax := 0.0
+	totalGrowth := 0.0
+
+	// Draw rows
+	r.pdf.SetFont("Arial", "", 7)
+	r.pdf.SetTextColor(50, 50, 50)
+
+	for i, year := range r.result.Years {
+		// Check for page break
+		if r.pdf.GetY() > 270 {
+			r.pdf.AddPage()
+			// Redraw header
+			r.pdf.SetFont("Arial", "B", 11)
+			r.pdf.SetTextColor(0, 51, 102)
+			r.pdf.CellFormat(contentWidth, 7, "Year-by-Year Summary (continued)", "", 1, "L", false, 0, "")
+
+			r.pdf.SetFillColor(0, 51, 102)
+			r.pdf.SetTextColor(255, 255, 255)
+			r.pdf.SetFont("Arial", "B", 7)
+			for j, header := range headers {
+				align := "L"
+				if j == 1 { // Ages column centered
+					align = "C"
+				} else if j > 1 {
+					align = "R"
+				}
+				r.pdf.CellFormat(colWidths[j], 5, header, "1", 0, align, true, 0, "")
+			}
+			r.pdf.Ln(-1)
+			r.pdf.SetFont("Arial", "", 7)
+			r.pdf.SetTextColor(50, 50, 50)
+		}
+
+		// Alternate row colors
+		if i%2 == 0 {
+			r.pdf.SetFillColor(250, 250, 250)
+		} else {
+			r.pdf.SetFillColor(255, 255, 255)
+		}
+
+		// Calculate investment growth applied at start of this year
+		// Growth = StartBalance(this year) - EndBalance(previous year)
+		// For year 0, no growth is applied (simulation starts fresh)
+		var growth float64
+		if i == 0 {
+			growth = 0
+		} else {
+			prevYear := r.result.Years[i-1]
+			growth = year.StartBalance - prevYear.TotalBalance
+		}
+
+		// Monthly required (income portion only, not mortgage)
+		monthlyRequired := year.RequiredIncome / 12
+
+		// Accumulate totals
+		totalNetIncome += year.NetIncomeReceived
+		totalMortgage += year.MortgageCost
+		totalTax += year.TotalTaxPaid
+		totalGrowth += growth
+
+		// Build ages string (e.g., "53/55" for two people)
+		agesStr := ""
+		ageValues := make([]int, 0, len(year.Ages))
+		for _, age := range year.Ages {
+			ageValues = append(ageValues, age)
+		}
+		sort.Ints(ageValues)
+		for i, age := range ageValues {
+			if i > 0 {
+				agesStr += "/"
+			}
+			agesStr += fmt.Sprintf("%d", age)
+		}
+
+		// Draw row
+		r.pdf.CellFormat(colWidths[0], 4, fmt.Sprintf("%d", year.Year), "1", 0, "L", true, 0, "")
+		r.pdf.CellFormat(colWidths[1], 4, agesStr, "1", 0, "C", true, 0, "")
+		r.pdf.CellFormat(colWidths[2], 4, formatCompactMoney(year.StartBalance), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[3], 4, formatCompactMoney(year.TotalBalance), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[4], 4, formatCompactMoney(monthlyRequired), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[5], 4, formatCompactMoney(year.NetIncomeReceived), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[6], 4, formatCompactMoney(year.MortgageCost), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[7], 4, formatCompactMoney(year.TotalTaxPaid), "1", 0, "R", true, 0, "")
+
+		// Color-code growth (green positive, red negative)
+		if growth >= 0 {
+			r.pdf.SetTextColor(0, 128, 0) // Green
+		} else {
+			r.pdf.SetTextColor(180, 0, 0) // Red
+		}
+		r.pdf.CellFormat(colWidths[8], 4, formatCompactMoney(growth), "1", 1, "R", true, 0, "")
+		r.pdf.SetTextColor(50, 50, 50)
+	}
+
+	// Totals row
+	r.pdf.SetFont("Arial", "B", 7)
+	r.pdf.SetFillColor(230, 235, 240)
+
+	startBal := 0.0
+	if len(r.result.Years) > 0 {
+		startBal = r.result.Years[0].StartBalance
+	}
+	endBal := 0.0
+	if len(r.result.Years) > 0 {
+		endBal = r.result.Years[len(r.result.Years)-1].TotalBalance
+	}
+
+	r.pdf.CellFormat(colWidths[0], 4, "TOTAL", "1", 0, "L", true, 0, "")
+	r.pdf.CellFormat(colWidths[1], 4, "-", "1", 0, "C", true, 0, "")
+	r.pdf.CellFormat(colWidths[2], 4, formatCompactMoney(startBal), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[3], 4, formatCompactMoney(endBal), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[4], 4, "-", "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[5], 4, formatCompactMoney(totalNetIncome), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[6], 4, formatCompactMoney(totalMortgage), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[7], 4, formatCompactMoney(totalTax), "1", 0, "R", true, 0, "")
+
+	if totalGrowth >= 0 {
+		r.pdf.SetTextColor(0, 128, 0)
+	} else {
+		r.pdf.SetTextColor(180, 0, 0)
+	}
+	r.pdf.CellFormat(colWidths[8], 4, formatCompactMoney(totalGrowth), "1", 1, "R", true, 0, "")
+	r.pdf.SetTextColor(50, 50, 50)
+
+	// Legend
+	r.pdf.Ln(2)
+	r.pdf.SetFont("Arial", "I", 6)
+	r.pdf.SetTextColor(100, 100, 100)
+	r.pdf.CellFormat(contentWidth, 3,
+		"Ages = P1/P2 | Start/End = Portfolio balance | Monthly = Required income/month | Net Inc = Spendable income | Growth = Investment gains (green) or losses (red)",
+		"", 1, "L", false, 0, "")
+}
+
+// formatCompactMoney formats money values for tables with full GBP amounts
+func formatCompactMoney(amount float64) string {
+	if amount == 0 {
+		return "-"
+	}
+	// Format with comma separators
+	return pdfText(formatWithCommas(amount))
+}
+
+// formatWithCommas formats a number with comma thousand separators and £ symbol
+func formatWithCommas(amount float64) string {
+	negative := amount < 0
+	if negative {
+		amount = -amount
+	}
+
+	// Round to nearest pound
+	rounded := int64(amount + 0.5)
+
+	// Convert to string with commas
+	str := fmt.Sprintf("%d", rounded)
+
+	// Add commas from right to left
+	n := len(str)
+	if n <= 3 {
+		if negative {
+			return fmt.Sprintf("-\xa3%s", str)
+		}
+		return fmt.Sprintf("\xa3%s", str)
+	}
+
+	// Build string with commas
+	var result []byte
+	for i, c := range str {
+		if i > 0 && (n-i)%3 == 0 {
+			result = append(result, ',')
+		}
+		result = append(result, byte(c))
+	}
+
+	if negative {
+		return fmt.Sprintf("-\xa3%s", string(result))
+	}
+	return fmt.Sprintf("\xa3%s", string(result))
 }
 
 func (r *PDFActionPlanReport) addYearByYearSummary() {
@@ -522,18 +745,27 @@ func (r *PDFActionPlanReport) drawYearSection(plan YearActionPlan, personNames [
 		plan.Year, plan.Year+1, plan.TaxYearStart, plan.TaxYearEnd, ageStr)
 	r.pdf.CellFormat(contentWidth, 7, headerText, "", 1, "L", true, 0, "")
 
-	// Summary row
+	// Summary row - accounting structure with Start Balance, movements, End Balance
 	r.pdf.SetFillColor(240, 248, 255)
 	r.pdf.SetTextColor(0, 51, 102)
-	r.pdf.SetFont("Arial", "", 8)
+	r.pdf.SetFont("Arial", "", 7)
 
-	summaryText := fmt.Sprintf("Required: %s  |  Withdrawals: %s  |  Tax: %s  |  Net: %s  |  End Balance: %s",
+	// First line: Start Balance, Required, Withdrawals
+	summaryLine1 := fmt.Sprintf("Start: %s  |  Required: %s  |  Withdrawals: %s",
+		FormatMoneyPDF(plan.Summary.StartingBalance),
 		FormatMoneyPDF(plan.Summary.TotalIncome),
-		FormatMoneyPDF(plan.Summary.TotalWithdrawals),
+		FormatMoneyPDF(plan.Summary.TotalWithdrawals))
+	if plan.Summary.MortgageCost > 0 {
+		summaryLine1 += fmt.Sprintf("  |  Mortgage: %s", FormatMoneyPDF(plan.Summary.MortgageCost))
+	}
+	r.pdf.CellFormat(contentWidth, 4, summaryLine1, "", 1, "L", true, 0, "")
+
+	// Second line: Tax, Net, End Balance
+	summaryLine2 := fmt.Sprintf("Tax: %s  |  Net: %s  |  End: %s",
 		FormatMoneyPDF(plan.Summary.TotalTaxPaid),
 		FormatMoneyPDF(plan.Summary.NetIncomeReceived),
 		FormatMoneyPDF(plan.Summary.EndingBalance))
-	r.pdf.CellFormat(contentWidth, 5, summaryText, "", 1, "L", true, 0, "")
+	r.pdf.CellFormat(contentWidth, 4, summaryLine2, "", 1, "L", true, 0, "")
 
 	// Action items (milestones and key events)
 	r.pdf.SetTextColor(50, 50, 50)
@@ -663,8 +895,8 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	// Tax year months (April to March)
 	months := []string{"Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"}
 
-	// Draw compact table header
-	colWidths := []float64{15, 24, 26, 26, 26, 25, 38}
+	// Draw table header with full GBP amounts
+	colWidths := []float64{18, 22, 22, 22, 22, 22, 52}
 	headers := []string{"Month", "Net Needed", "ISA Withdrawal", "Pen Tax-Free", "Pen Taxable", "ISA Deposit", "Notes"}
 
 	r.pdf.SetFillColor(70, 90, 110)
@@ -788,15 +1020,12 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	}
 }
 
-// formatMonthlyMoney formats small monthly amounts more compactly with £ symbol
+// formatMonthlyMoney formats monthly amounts with full GBP values
 func formatMonthlyMoney(amount float64) string {
 	if amount == 0 {
 		return "-"
 	}
-	if amount >= 1000 {
-		return pdfText(fmt.Sprintf("£%.1fk", amount/1000))
-	}
-	return pdfText(fmt.Sprintf("£%.0f", amount))
+	return pdfText(formatWithCommas(amount))
 }
 
 // drawMortgagePayoffSchedule draws a detailed mortgage payoff schedule
@@ -929,8 +1158,10 @@ func (r *PDFActionPlanReport) buildYearActionPlan(yearState YearState) YearActio
 		Ages:         yearState.Ages,
 		Actions:      make([]ActionItem, 0),
 		Summary: YearSummaryPDF{
+			StartingBalance:   yearState.StartBalance,
 			TotalIncome:       yearState.TotalRequired,
 			TotalWithdrawals:  yearState.Withdrawals.TotalTaxFree + yearState.Withdrawals.TotalTaxable,
+			MortgageCost:      yearState.MortgageCost,
 			TotalTaxPaid:      yearState.TotalTaxPaid,
 			NetIncomeReceived: yearState.NetIncomeReceived,
 			EndingBalance:     yearState.TotalBalance,
