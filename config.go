@@ -166,6 +166,61 @@ type TaxBand struct {
 	Rate  float64 `yaml:"rate" json:"rate"`
 }
 
+// TaxConfig holds UK tax configuration including personal allowance tapering
+// These values are set by HMRC and may change with each tax year
+type TaxConfig struct {
+	// Personal Allowance is the amount you can earn tax-free (2024/25: £12,570)
+	PersonalAllowance float64 `yaml:"personal_allowance" json:"personal_allowance"`
+	// TaperingThreshold is the income level above which personal allowance starts to reduce (2024/25: £100,000)
+	TaperingThreshold float64 `yaml:"tapering_threshold" json:"tapering_threshold"`
+	// TaperingRate is how much allowance is lost per £1 over threshold (2024/25: £0.50, so £1 lost per £2 earned)
+	TaperingRate float64 `yaml:"tapering_rate" json:"tapering_rate"`
+}
+
+// GetPersonalAllowance returns the personal allowance, using default if not set
+func (tc *TaxConfig) GetPersonalAllowance() float64 {
+	if tc.PersonalAllowance <= 0 {
+		return 12570.0 // 2024/25 default
+	}
+	return tc.PersonalAllowance
+}
+
+// GetTaperingThreshold returns the tapering threshold, using default if not set
+func (tc *TaxConfig) GetTaperingThreshold() float64 {
+	if tc.TaperingThreshold <= 0 {
+		return 100000.0 // 2024/25 default
+	}
+	return tc.TaperingThreshold
+}
+
+// GetTaperingRate returns the tapering rate, using default if not set
+func (tc *TaxConfig) GetTaperingRate() float64 {
+	if tc.TaperingRate <= 0 {
+		return 0.5 // 2024/25 default: £1 lost per £2 over threshold
+	}
+	return tc.TaperingRate
+}
+
+// GetAllowanceRemovedThreshold returns the income at which personal allowance is fully removed
+// This is calculated from personal allowance, tapering threshold and rate
+func (tc *TaxConfig) GetAllowanceRemovedThreshold() float64 {
+	pa := tc.GetPersonalAllowance()
+	threshold := tc.GetTaperingThreshold()
+	rate := tc.GetTaperingRate()
+	// PA is reduced by rate for each £1 over threshold
+	// PA = 0 when: threshold + (PA / rate)
+	return threshold + (pa / rate)
+}
+
+// DefaultTaxConfig returns the default UK tax configuration for 2024/25
+func DefaultTaxConfig() TaxConfig {
+	return TaxConfig{
+		PersonalAllowance: 12570.0,
+		TaperingThreshold: 100000.0,
+		TaperingRate:      0.5,
+	}
+}
+
 // Config holds the complete configuration
 type Config struct {
 	People             []PersonConfig    `yaml:"people" json:"people"`
@@ -176,6 +231,7 @@ type Config struct {
 	Sensitivity        SensitivityConfig `yaml:"sensitivity" json:"sensitivity"`
 	Strategy           StrategyConfig    `yaml:"strategy" json:"strategy"`
 	TaxBands           []TaxBand         `yaml:"tax_bands" json:"tax_bands"`
+	Tax                TaxConfig         `yaml:"tax" json:"tax"`
 }
 
 // LoadConfig loads configuration from a YAML file

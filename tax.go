@@ -4,25 +4,27 @@ import (
 	"math"
 )
 
-// Personal Allowance tapering thresholds (2024/25 onwards)
-const (
-	PersonalAllowanceBase    = 12570.0  // Standard Personal Allowance
-	TaperingThreshold        = 100000.0 // Income above which allowance reduces
-	TaperingRate             = 0.5      // £1 reduction per £2 over threshold
-	AllowanceFullyRemovedAt  = 125140.0 // Income at which allowance is zero
-)
+// Note: Personal Allowance tapering settings are now configurable via TaxConfig in config.go
+// Default values for 2024/25:
+// - PersonalAllowance: £12,570
+// - TaperingThreshold: £100,000
+// - TaperingRate: 0.5 (£1 lost per £2 over threshold)
+// - AllowanceFullyRemoved: £125,140 (calculated from above)
 
-// ApplyPersonalAllowanceTapering adjusts tax bands to account for reduced Personal Allowance
-// for incomes over £100,000. Returns modified tax bands.
-func ApplyPersonalAllowanceTapering(bands []TaxBand, totalIncome float64) []TaxBand {
-	if totalIncome <= TaperingThreshold {
+// ApplyPersonalAllowanceTaperingWithConfig adjusts tax bands to account for reduced Personal Allowance
+// for incomes over the tapering threshold. Returns modified tax bands.
+func ApplyPersonalAllowanceTaperingWithConfig(bands []TaxBand, totalIncome float64, taxConfig TaxConfig) []TaxBand {
+	threshold := taxConfig.GetTaperingThreshold()
+	if totalIncome <= threshold {
 		// No tapering needed
 		return bands
 	}
 
 	// Calculate reduced Personal Allowance
-	reduction := (totalIncome - TaperingThreshold) * TaperingRate
-	reducedAllowance := math.Max(0, PersonalAllowanceBase-reduction)
+	personalAllowance := taxConfig.GetPersonalAllowance()
+	taperingRate := taxConfig.GetTaperingRate()
+	reduction := (totalIncome - threshold) * taperingRate
+	reducedAllowance := math.Max(0, personalAllowance-reduction)
 
 	// Find the Personal Allowance band (rate = 0) and adjust it
 	adjustedBands := make([]TaxBand, len(bands))
@@ -50,6 +52,12 @@ func ApplyPersonalAllowanceTapering(bands []TaxBand, totalIncome float64) []TaxB
 	return adjustedBands
 }
 
+// ApplyPersonalAllowanceTapering is a convenience wrapper using default tax config
+// Deprecated: Use ApplyPersonalAllowanceTaperingWithConfig for configurable thresholds
+func ApplyPersonalAllowanceTapering(bands []TaxBand, totalIncome float64) []TaxBand {
+	return ApplyPersonalAllowanceTaperingWithConfig(bands, totalIncome, DefaultTaxConfig())
+}
+
 // CalculateTaxOnIncome calculates the tax owed on a given taxable income
 // This is the base calculation without Personal Allowance tapering
 func CalculateTaxOnIncome(income float64, bands []TaxBand) float64 {
@@ -74,29 +82,41 @@ func CalculateTaxOnIncome(income float64, bands []TaxBand) float64 {
 	return totalTax
 }
 
-// CalculateTaxWithTapering calculates tax including Personal Allowance tapering
-// for incomes over £100,000
-func CalculateTaxWithTapering(income float64, bands []TaxBand) float64 {
+// CalculateTaxWithTaperingAndConfig calculates tax including Personal Allowance tapering
+// using the provided tax configuration
+func CalculateTaxWithTaperingAndConfig(income float64, bands []TaxBand, taxConfig TaxConfig) float64 {
 	if income <= 0 {
 		return 0
 	}
 
 	// Apply Personal Allowance tapering if applicable
-	adjustedBands := ApplyPersonalAllowanceTapering(bands, income)
+	adjustedBands := ApplyPersonalAllowanceTaperingWithConfig(bands, income, taxConfig)
 	return CalculateTaxOnIncome(income, adjustedBands)
 }
 
-// CalculateMarginalTax calculates the additional tax from withdrawing an amount
+// CalculateTaxWithTapering is a convenience wrapper using default tax config
+// Deprecated: Use CalculateTaxWithTaperingAndConfig for configurable thresholds
+func CalculateTaxWithTapering(income float64, bands []TaxBand) float64 {
+	return CalculateTaxWithTaperingAndConfig(income, bands, DefaultTaxConfig())
+}
+
+// CalculateMarginalTaxWithConfig calculates the additional tax from withdrawing an amount
 // given existing taxable income (includes Personal Allowance tapering)
-func CalculateMarginalTax(withdrawalAmount, existingIncome float64, bands []TaxBand) float64 {
-	taxWithWithdrawal := CalculateTaxWithTapering(existingIncome+withdrawalAmount, bands)
-	taxWithoutWithdrawal := CalculateTaxWithTapering(existingIncome, bands)
+func CalculateMarginalTaxWithConfig(withdrawalAmount, existingIncome float64, bands []TaxBand, taxConfig TaxConfig) float64 {
+	taxWithWithdrawal := CalculateTaxWithTaperingAndConfig(existingIncome+withdrawalAmount, bands, taxConfig)
+	taxWithoutWithdrawal := CalculateTaxWithTaperingAndConfig(existingIncome, bands, taxConfig)
 	return taxWithWithdrawal - taxWithoutWithdrawal
 }
 
-// GrossUpForTax calculates the gross amount needed to achieve a net amount after tax
+// CalculateMarginalTax is a convenience wrapper using default tax config
+// Deprecated: Use CalculateMarginalTaxWithConfig for configurable thresholds
+func CalculateMarginalTax(withdrawalAmount, existingIncome float64, bands []TaxBand) float64 {
+	return CalculateMarginalTaxWithConfig(withdrawalAmount, existingIncome, bands, DefaultTaxConfig())
+}
+
+// GrossUpForTaxWithConfig calculates the gross amount needed to achieve a net amount after tax
 // Uses binary search to find the gross amount
-func GrossUpForTax(netNeeded, existingIncome float64, bands []TaxBand) (gross, tax float64) {
+func GrossUpForTaxWithConfig(netNeeded, existingIncome float64, bands []TaxBand, taxConfig TaxConfig) (gross, tax float64) {
 	if netNeeded <= 0 {
 		return 0, 0
 	}
@@ -108,7 +128,7 @@ func GrossUpForTax(netNeeded, existingIncome float64, bands []TaxBand) (gross, t
 	// Binary search for the correct gross amount
 	for i := 0; i < 100; i++ {
 		mid := (low + high) / 2
-		marginalTax := CalculateMarginalTax(mid, existingIncome, bands)
+		marginalTax := CalculateMarginalTaxWithConfig(mid, existingIncome, bands, taxConfig)
 		netFromMid := mid - marginalTax
 
 		if math.Abs(netFromMid-netNeeded) < 0.01 {
@@ -123,18 +143,60 @@ func GrossUpForTax(netNeeded, existingIncome float64, bands []TaxBand) (gross, t
 	}
 
 	// Return best estimate if convergence takes too long
-	finalTax := CalculateMarginalTax(high, existingIncome, bands)
+	finalTax := CalculateMarginalTaxWithConfig(high, existingIncome, bands, taxConfig)
 	return high, finalTax
 }
 
-// CalculatePersonTax calculates total tax for a person in a year
+// GrossUpForTax is a convenience wrapper using default tax config
+// Deprecated: Use GrossUpForTaxWithConfig for configurable thresholds
+func GrossUpForTax(netNeeded, existingIncome float64, bands []TaxBand) (gross, tax float64) {
+	return GrossUpForTaxWithConfig(netNeeded, existingIncome, bands, DefaultTaxConfig())
+}
+
+// CalculatePersonTaxWithConfig calculates total tax for a person in a year
 // including state pension and any taxable withdrawals (with Personal Allowance tapering)
-func CalculatePersonTax(statePension, taxableWithdrawal float64, bands []TaxBand) float64 {
+func CalculatePersonTaxWithConfig(statePension, taxableWithdrawal float64, bands []TaxBand, taxConfig TaxConfig) float64 {
 	totalTaxableIncome := statePension + taxableWithdrawal
-	return CalculateTaxWithTapering(totalTaxableIncome, bands)
+	return CalculateTaxWithTaperingAndConfig(totalTaxableIncome, bands, taxConfig)
+}
+
+// CalculatePersonTax is a convenience wrapper using default tax config
+// Deprecated: Use CalculatePersonTaxWithConfig for configurable thresholds
+func CalculatePersonTax(statePension, taxableWithdrawal float64, bands []TaxBand) float64 {
+	return CalculatePersonTaxWithConfig(statePension, taxableWithdrawal, bands, DefaultTaxConfig())
+}
+
+// InflateTaxBandsAndConfig returns tax bands and tax config inflated from start year to current year
+func InflateTaxBandsAndConfig(baseBands []TaxBand, baseTaxConfig TaxConfig, startYear, currentYear int, inflationRate float64) ([]TaxBand, TaxConfig) {
+	if inflationRate == 0 || currentYear <= startYear {
+		return baseBands, baseTaxConfig
+	}
+
+	yearsElapsed := currentYear - startYear
+	multiplier := math.Pow(1+inflationRate, float64(yearsElapsed))
+
+	inflatedBands := make([]TaxBand, len(baseBands))
+	for i, band := range baseBands {
+		inflatedBands[i] = TaxBand{
+			Name:  band.Name,
+			Lower: band.Lower * multiplier,
+			Upper: band.Upper * multiplier,
+			Rate:  band.Rate, // Rate stays the same
+		}
+	}
+
+	// Also inflate the tax config thresholds
+	inflatedConfig := TaxConfig{
+		PersonalAllowance: baseTaxConfig.GetPersonalAllowance() * multiplier,
+		TaperingThreshold: baseTaxConfig.GetTaperingThreshold() * multiplier,
+		TaperingRate:      baseTaxConfig.GetTaperingRate(), // Rate stays the same
+	}
+
+	return inflatedBands, inflatedConfig
 }
 
 // InflateTaxBands returns tax bands inflated from start year to current year
+// Note: This does not inflate the tapering thresholds. Use InflateTaxBandsAndConfig for full inflation.
 func InflateTaxBands(baseBands []TaxBand, startYear, currentYear int, inflationRate float64) []TaxBand {
 	if inflationRate == 0 || currentYear <= startYear {
 		return baseBands

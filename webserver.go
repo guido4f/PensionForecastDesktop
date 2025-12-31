@@ -43,6 +43,7 @@ type APISimulationRequest struct {
 	Mortgage          MortgageConfig `json:"mortgage"`
 	Simulation        SimulationConfig `json:"simulation"`
 	TaxBands          []TaxBand `json:"tax_bands,omitempty"`
+	Tax               TaxConfig `json:"tax,omitempty"` // Personal allowance tapering settings
 }
 
 // APISimulationResponse represents the simulation results
@@ -560,6 +561,7 @@ func (ws *WebServer) buildConfig(req *APISimulationRequest) *Config {
 		Mortgage:           req.Mortgage,
 		Simulation:         req.Simulation,
 		TaxBands:           req.TaxBands,
+		Tax:                req.Tax,
 	}
 
 	// Use defaults for missing values
@@ -582,6 +584,15 @@ func (ws *WebServer) buildConfig(req *APISimulationRequest) *Config {
 			config.TaxBands = ws.config.TaxBands
 		} else {
 			config.TaxBands = getDefaultTaxBands()
+		}
+	}
+
+	// Use default tax config if not set (all values zero means not configured)
+	if config.Tax.PersonalAllowance == 0 && config.Tax.TaperingThreshold == 0 {
+		if ws.config != nil && (ws.config.Tax.PersonalAllowance > 0 || ws.config.Tax.TaperingThreshold > 0) {
+			config.Tax = ws.config.Tax
+		} else {
+			config.Tax = DefaultTaxConfig()
 		}
 	}
 
@@ -1151,10 +1162,11 @@ func (ws *WebServer) runDepletionSimulation(config *Config, goal OptimizationGoa
 		results = append(results, summary)
 		simResults = append(simResults, dr.SimulationResult)
 
+		// Use MonthlyBeforeAge for income scoring to match sensitivity grid's FindBestDepletionStrategy
 		score, secondary, higherIsBetter, higherSecondary := calcScores(
 			dr.SimulationResult.TotalTaxPaid,
 			dr.SimulationResult.TotalWithdrawn,
-			summary.TotalIncome,
+			dr.MonthlyBeforeAge, // Use sustainable monthly income, not TotalIncome
 			summary.FinalBalance,
 		)
 
@@ -1246,10 +1258,11 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationG
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
 		results = append(results, summary)
 
+		// Use MonthlyBeforeAge for income scoring to match sensitivity grid's FindBestDepletionStrategy
 		score, secondary, higherIsBetter, higherSecondary := calcScores(
 			dr.SimulationResult.TotalTaxPaid,
 			dr.SimulationResult.TotalWithdrawn,
-			summary.TotalIncome,
+			dr.MonthlyBeforeAge, // Use sustainable monthly income, not TotalIncome
 			summary.FinalBalance,
 		)
 
@@ -1341,10 +1354,11 @@ func (ws *WebServer) runPensionToISASimulation(config *Config, goal Optimization
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
 		results = append(results, summary)
 
+		// Use MonthlyBeforeAge for income scoring to match sensitivity grid's FindBestDepletionStrategy
 		score, secondary, higherIsBetter, higherSecondary := calcScores(
 			dr.SimulationResult.TotalTaxPaid,
 			dr.SimulationResult.TotalWithdrawn,
-			summary.TotalIncome,
+			dr.MonthlyBeforeAge, // Use sustainable monthly income, not TotalIncome
 			summary.FinalBalance,
 		)
 
@@ -2322,18 +2336,18 @@ const webUIHTML = `<!DOCTYPE html>
         .sensitivity-toggle label { cursor: pointer; font-size: 0.9rem; }
 
         .sensitivity-grid-container { margin-top: 1rem; }
-        .sensitivity-grid { display: grid; gap: 2px; font-size: 0.7rem; }
-        .sensitivity-header { background: var(--bg-darker); padding: 0.4rem; text-align: center; font-weight: 600; }
+        .sensitivity-grid { display: grid; gap: 2px; font-size: 0.85rem; }
+        .sensitivity-header { background: var(--bg-darker); padding: 0.5rem; text-align: center; font-weight: 600; }
         .sensitivity-cell {
-            padding: 0.4rem 0.2rem;
+            padding: 0.5rem 0.3rem;
             text-align: center;
             cursor: pointer;
             transition: transform 0.1s, box-shadow 0.1s;
             border-radius: 2px;
         }
         .sensitivity-cell:hover { transform: scale(1.1); box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 10; position: relative; }
-        .sensitivity-cell .income { font-weight: 600; font-size: 0.8rem; }
-        .sensitivity-cell .strategy { font-size: 0.6rem; opacity: 0.9; }
+        .sensitivity-cell .income { font-weight: 600; font-size: 0.95rem; }
+        .sensitivity-cell .strategy { font-size: 0.75rem; opacity: 0.9; }
 
         /* Strategy color classes */
         .cell-isa-first { background: #e3f2fd; color: #1565c0; }
@@ -2898,6 +2912,115 @@ const webUIHTML = `<!DOCTYPE html>
                     </div>
                 </div>
 
+                <!-- Tax Settings -->
+                <div class="card">
+                    <h2 class="collapsible collapsed">Tax Settings</h2>
+                    <div class="collapse-content collapsed">
+                        <div class="form-section">
+                            <div class="form-section-title">Personal Allowance Tapering</div>
+                            <div class="form-hint" style="margin-bottom: 0.5rem;">For income over threshold, PA reduces by tapering rate</div>
+                            <div class="form-row-3">
+                                <div class="form-group">
+                                    <label>Personal Allowance</label>
+                                    <input type="text" id="tax-personal-allowance" value="12570">
+                                    <div class="form-hint">Tax-free amount</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Taper Threshold</label>
+                                    <input type="text" id="tax-tapering-threshold" value="100000">
+                                    <div class="form-hint">PA starts reducing</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Taper Rate</label>
+                                    <input type="number" id="tax-tapering-rate" value="0.5" step="0.1" min="0" max="1">
+                                    <div class="form-hint">PA lost per £1</div>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Band Inflation %</label>
+                                    <input type="number" id="tax-band-inflation" value="3" step="0.5">
+                                    <div class="form-hint">Annual tax band adjustment (0 = frozen)</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section" style="margin-bottom: 0;">
+                            <div class="form-section-title">Tax Bands (2024/25)</div>
+                            <div id="tax-bands-container">
+                                <div class="tax-band-row" data-band="0">
+                                    <div class="form-row-4" style="align-items: end;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label>Name</label>
+                                            <input type="text" class="tax-band-name" value="Personal Allowance" readonly style="background: var(--bg-darker);">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label>From</label>
+                                            <input type="text" class="tax-band-lower" value="0" readonly style="background: var(--bg-darker);">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label>To</label>
+                                            <input type="text" class="tax-band-upper" value="12570">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label>Rate %</label>
+                                            <input type="number" class="tax-band-rate" value="0" step="1" readonly style="background: var(--bg-darker);">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tax-band-row" data-band="1">
+                                    <div class="form-row-4" style="align-items: end;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-name" value="Basic Rate">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-lower" value="12570">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-upper" value="50270">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="number" class="tax-band-rate" value="20" step="1">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tax-band-row" data-band="2">
+                                    <div class="form-row-4" style="align-items: end;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-name" value="Higher Rate">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-lower" value="50270">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-upper" value="125140">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="number" class="tax-band-rate" value="40" step="1">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tax-band-row" data-band="3">
+                                    <div class="form-row-4" style="align-items: end;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-name" value="Additional Rate">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-lower" value="125140">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tax-band-upper" value="10000000">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="number" class="tax-band-rate" value="45" step="1">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Mortgage -->
                 <div class="card">
                     <h2 class="collapsible collapsed">Mortgage</h2>
@@ -3416,7 +3539,7 @@ const webUIHTML = `<!DOCTYPE html>
                     income_inflation_rate: parseFloat(document.getElementById('income-inflation').value) / 100,
                     state_pension_amount: parseMoney(document.getElementById('state-pension').value),
                     state_pension_inflation: parseFloat(document.getElementById('sp-inflation').value) / 100,
-                    tax_band_inflation: 0.03,  // 3% annual tax band inflation
+                    tax_band_inflation: parseFloat(document.getElementById('tax-band-inflation').value) / 100,
                     emergency_fund_months: parseInt(document.getElementById('emergency-months').value) || 0,
                     emergency_fund_inflation_adjust: document.getElementById('emergency-inflate').checked,
                     growth_decline_enabled: document.getElementById('growth-decline-enabled').checked,
@@ -3461,8 +3584,28 @@ const webUIHTML = `<!DOCTYPE html>
                 },
                 strategy: {
                     maximize_couple_isa: document.getElementById('maximize-couple-isa').checked
-                }
+                },
+                tax: {
+                    personal_allowance: parseMoney(document.getElementById('tax-personal-allowance').value),
+                    tapering_threshold: parseMoney(document.getElementById('tax-tapering-threshold').value),
+                    tapering_rate: parseFloat(document.getElementById('tax-tapering-rate').value)
+                },
+                tax_bands: getTaxBands()
             };
+        }
+
+        // Get tax bands from UI
+        function getTaxBands() {
+            const bands = [];
+            document.querySelectorAll('.tax-band-row').forEach(row => {
+                bands.push({
+                    name: row.querySelector('.tax-band-name').value,
+                    lower: parseMoney(row.querySelector('.tax-band-lower').value),
+                    upper: parseMoney(row.querySelector('.tax-band-upper').value),
+                    rate: parseFloat(row.querySelector('.tax-band-rate').value) / 100
+                });
+            });
+            return bands;
         }
 
         // Run simulation function (called on mode change and button click)
@@ -3563,8 +3706,23 @@ const webUIHTML = `<!DOCTYPE html>
         }
 
         // Get cell class based on strategy
-        function getCellClass(cell) {
-            if (cell.ran_out) return 'cell-ran-out';
+        // In depletion mode, hitting target year is success (show strategy color, not ran-out)
+        function getCellClass(cell, isDepletion, targetYear) {
+            // In depletion mode, only show ran-out if depleted significantly BEFORE target
+            if (cell.ran_out) {
+                if (isDepletion) {
+                    // In depletion mode: on-target or after-target = success, show strategy color
+                    // Only show ran-out red if depleted more than 2 years before target
+                    if (cell.ran_out_year >= targetYear - 2) {
+                        // On target or later - fall through to show strategy color
+                    } else {
+                        return 'cell-ran-out';
+                    }
+                } else {
+                    // Fixed mode: ran out is always bad
+                    return 'cell-ran-out';
+                }
+            }
             if (cell.has_shortfall) return 'cell-shortfall';
             const strategy = (cell.best_strategy || '').toLowerCase();
             if (strategy.includes('isa') && strategy.includes('first')) return 'cell-isa-first';
@@ -3598,7 +3756,7 @@ const webUIHTML = `<!DOCTYPE html>
             data.pension_rates.forEach((pensionRate, pi) => {
                 html += '<div class="sensitivity-header">' + (pensionRate * 100).toFixed(0) + '%</div>';
                 data.grid[pi].forEach((cell, si) => {
-                    const cellClass = getCellClass(cell);
+                    const cellClass = getCellClass(cell, isDepletion, targetYear);
                     const savingsRate = data.savings_rates[si];
                     html += '<div class="sensitivity-cell ' + cellClass + '" onclick="runWithRates(' + pensionRate + ',' + savingsRate + ')" title="Click to simulate with Pension: ' + (pensionRate * 100).toFixed(0) + '%, Savings: ' + (savingsRate * 100).toFixed(0) + '%">';
                     if (isDepletion && cell.sustainable_income > 0) {
@@ -3608,9 +3766,11 @@ const webUIHTML = `<!DOCTYPE html>
                         // In depletion mode, hitting target is success
                         if (!cell.ran_out && !cell.has_shortfall) {
                             html += '<div class="strategy">' + (cell.best_strategy || 'Surplus') + '</div>';
-                        } else if (cell.ran_out && Math.abs(cell.ran_out_year - targetYear) <= 1) {
-                            html += '<div class="strategy">✅ On Target</div>';
-                        } else if (cell.ran_out && cell.ran_out_year < targetYear) {
+                        } else if (cell.ran_out && cell.ran_out_year >= targetYear - 2) {
+                            // On target (within 2 years) - show strategy name
+                            html += '<div class="strategy">' + (cell.best_strategy || 'On Target') + '</div>';
+                        } else if (cell.ran_out && cell.ran_out_year < targetYear - 2) {
+                            // Depleted significantly before target - show warning
                             html += '<div class="strategy">Depleted ' + cell.ran_out_year + '</div>';
                         } else if (cell.has_shortfall) {
                             html += '<div class="strategy">Shortfall</div>';
@@ -3803,7 +3963,7 @@ const webUIHTML = `<!DOCTYPE html>
                     if (!r.ran_out_of_money) {
                         html += '<span class="badge badge-info">Surplus</span>';
                     } else if (Math.abs(r.ran_out_year - targetYear) <= 1) {
-                        html += '<span class="badge badge-success">✅ On Target</span>';
+                        html += '<span class="badge badge-success">' + displayName + '</span>';
                     } else if (r.ran_out_year < targetYear) {
                         html += '<span class="badge badge-danger">Depleted ' + r.ran_out_year + '</span>';
                     } else {
@@ -4277,6 +4437,29 @@ const webUIHTML = `<!DOCTYPE html>
                 if (config.strategy) {
                     // Default to true if not specified
                     document.getElementById('maximize-couple-isa').checked = config.strategy.maximize_couple_isa !== false;
+                }
+
+                // Load tax settings
+                if (config.tax) {
+                    document.getElementById('tax-personal-allowance').value = config.tax.personal_allowance || 12570;
+                    document.getElementById('tax-tapering-threshold').value = config.tax.tapering_threshold || 100000;
+                    document.getElementById('tax-tapering-rate').value = config.tax.tapering_rate || 0.5;
+                }
+                if (config.financial) {
+                    document.getElementById('tax-band-inflation').value = ((config.financial.tax_band_inflation || 0.03) * 100).toFixed(1);
+                }
+                // Load tax bands
+                if (config.tax_bands && config.tax_bands.length > 0) {
+                    const container = document.getElementById('tax-bands-container');
+                    const rows = container.querySelectorAll('.tax-band-row');
+                    config.tax_bands.forEach((band, i) => {
+                        if (rows[i]) {
+                            rows[i].querySelector('.tax-band-name').value = band.name || '';
+                            rows[i].querySelector('.tax-band-lower').value = band.lower || 0;
+                            rows[i].querySelector('.tax-band-upper').value = band.upper || 0;
+                            rows[i].querySelector('.tax-band-rate').value = (band.rate * 100).toFixed(0);
+                        }
+                    });
                 }
 
                 // Load mortgage settings

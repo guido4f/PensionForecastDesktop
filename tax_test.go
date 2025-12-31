@@ -151,18 +151,19 @@ func TestTaxCalculation_HigherRateBand(t *testing.T) {
 // income is £125,140 or above."
 
 func TestPersonalAllowanceTapering_Constants(t *testing.T) {
-	// Verify constants match GOV.UK 2024/25 figures
-	if PersonalAllowanceBase != 12570.0 {
-		t.Errorf("PersonalAllowanceBase should be £12,570, got £%.0f", PersonalAllowanceBase)
+	// Verify default config values match GOV.UK 2024/25 figures
+	taxConfig := DefaultTaxConfig()
+	if taxConfig.GetPersonalAllowance() != 12570.0 {
+		t.Errorf("PersonalAllowance should be £12,570, got £%.0f", taxConfig.GetPersonalAllowance())
 	}
-	if TaperingThreshold != 100000.0 {
-		t.Errorf("TaperingThreshold should be £100,000, got £%.0f", TaperingThreshold)
+	if taxConfig.GetTaperingThreshold() != 100000.0 {
+		t.Errorf("TaperingThreshold should be £100,000, got £%.0f", taxConfig.GetTaperingThreshold())
 	}
-	if TaperingRate != 0.5 {
-		t.Errorf("TaperingRate should be 0.5 (£1 per £2), got %.2f", TaperingRate)
+	if taxConfig.GetTaperingRate() != 0.5 {
+		t.Errorf("TaperingRate should be 0.5 (£1 per £2), got %.2f", taxConfig.GetTaperingRate())
 	}
-	if AllowanceFullyRemovedAt != 125140.0 {
-		t.Errorf("AllowanceFullyRemovedAt should be £125,140, got £%.0f", AllowanceFullyRemovedAt)
+	if taxConfig.GetAllowanceRemovedThreshold() != 125140.0 {
+		t.Errorf("AllowanceRemovedThreshold should be £125,140, got £%.0f", taxConfig.GetAllowanceRemovedThreshold())
 	}
 }
 
@@ -218,13 +219,14 @@ func TestTaxWithTapering_60PercentTrap(t *testing.T) {
 		},
 	}
 
+	taxConfig := DefaultTaxConfig()
 	for _, tc := range tests {
 		t.Run(tc.description, func(t *testing.T) {
 			tax := CalculateTaxWithTapering(tc.income, ukTaxBands2024)
 
 			// Verify the reduced allowance calculation
-			reduction := (tc.income - TaperingThreshold) * TaperingRate
-			actualReducedAllowance := math.Max(0, PersonalAllowanceBase-reduction)
+			reduction := (tc.income - taxConfig.GetTaperingThreshold()) * taxConfig.GetTaperingRate()
+			actualReducedAllowance := math.Max(0, taxConfig.GetPersonalAllowance()-reduction)
 			if math.Abs(actualReducedAllowance-tc.reducedAllowance) > 0.01 {
 				t.Errorf("Reduced allowance should be £%.0f, got £%.0f",
 					tc.reducedAllowance, actualReducedAllowance)

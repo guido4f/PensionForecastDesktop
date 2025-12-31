@@ -183,6 +183,8 @@ sensitivity:
 # ─────────────────────────────────────────────────────────────────────────────
 # TAX BANDS - UK income tax bands (update if rates change)
 # ─────────────────────────────────────────────────────────────────────────────
+# Note: Tax bands are subject to annual changes by HMRC.
+# Current values are for 2024/25 tax year.
 tax_bands:
   - name: "Personal Allowance"
     lower: 0
@@ -200,3 +202,21 @@ tax_bands:
     lower: 125140
     upper: 10000000
     rate: 0.45
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAX - Personal Allowance tapering settings (update if rules change)
+# ─────────────────────────────────────────────────────────────────────────────
+# For income over the tapering threshold, the Personal Allowance is reduced
+# by the tapering rate (£1 lost per £X over threshold).
+#
+# Example with 2024/25 values:
+#   - At £100,000: Full PA of £12,570
+#   - At £110,000: PA reduced by (£110,000 - £100,000) × 0.5 = £5,000 → PA = £7,570
+#   - At £125,140: PA reduced by (£125,140 - £100,000) × 0.5 = £12,570 → PA = £0
+#
+# This creates an effective 60% marginal tax rate in the £100k-£125k band
+# (40% income tax + 20% effective from losing PA)
+tax:
+  personal_allowance: 12570       # Standard Personal Allowance (£)
+  tapering_threshold: 100000      # Income above which PA starts to reduce (£)
+  tapering_rate: 0.5              # PA reduction per £1 over threshold (£1 lost per £2 = 0.5)
