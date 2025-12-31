@@ -345,6 +345,23 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 			state.NetRequired = 0
 		}
 
+		// Split NetRequired into income and mortgage components
+		// Other income sources first cover income needs, then mortgage if excess
+		totalOtherIncome := state.TotalStatePension + state.TotalDBPension + state.PartTimeIncome + pclsTaxFreeTotal
+		if totalOtherIncome >= state.RequiredIncome {
+			// Other income fully covers income needs, excess goes to mortgage
+			state.NetIncomeRequired = 0
+			excessForMortgage := totalOtherIncome - state.RequiredIncome
+			state.NetMortgageRequired = state.MortgageCost - excessForMortgage
+			if state.NetMortgageRequired < 0 {
+				state.NetMortgageRequired = 0
+			}
+		} else {
+			// Other income doesn't fully cover income needs
+			state.NetIncomeRequired = state.RequiredIncome - totalOtherIncome
+			state.NetMortgageRequired = state.MortgageCost // Full mortgage still needed
+		}
+
 		// Inflate tax bands for current year
 		taxBands := InflateTaxBands(config.TaxBands, config.Simulation.StartYear, year, config.Financial.TaxBandInflation)
 

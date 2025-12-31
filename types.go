@@ -422,6 +422,8 @@ type YearState struct {
 	DBPensionByPerson    map[string]float64 // DB pension per person (e.g., Teachers Pension)
 	TotalDBPension       float64
 	NetRequired          float64 // After state pension and DB pension - this is the after-tax income needed
+	NetIncomeRequired    float64 // Income portion of NetRequired (living expenses not covered by pensions)
+	NetMortgageRequired  float64 // Mortgage portion of NetRequired (mortgage payments not covered by excess pension income)
 	Withdrawals          WithdrawalBreakdown
 	TaxByPerson          map[string]float64
 	TotalTaxPaid         float64

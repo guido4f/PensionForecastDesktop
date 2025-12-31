@@ -616,6 +616,18 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	r.pdf.SetTextColor(0, 51, 102)
 	r.pdf.CellFormat(contentWidth, 5, "Monthly Schedule", "", 1, "L", false, 0, "")
 
+	// Show breakdown of net needed (income vs mortgage)
+	if yearState.NetMortgageRequired > 0 {
+		r.pdf.SetFont("Arial", "", 7)
+		r.pdf.SetTextColor(80, 80, 80)
+		r.pdf.CellFormat(contentWidth, 3.5,
+			fmt.Sprintf("Net Needed: %s/month (Income: %s + Mortgage: %s)",
+				FormatMoneyPDF(yearState.NetRequired/12),
+				FormatMoneyPDF(yearState.NetIncomeRequired/12),
+				FormatMoneyPDF(yearState.NetMortgageRequired/12)), "", 1, "L", false, 0, "")
+		r.pdf.Ln(1)
+	}
+
 	// Calculate monthly amounts
 	monthlyIncome := plan.Summary.NetIncomeReceived / 12
 

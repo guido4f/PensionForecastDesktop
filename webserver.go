@@ -99,6 +99,8 @@ type APIYearSummary struct {
 	Ages              map[string]int              `json:"ages"`
 	RequiredIncome    float64                     `json:"required_income"`
 	MortgageCost      float64                     `json:"mortgage_cost"`
+	NetIncomeRequired float64                     `json:"net_income_required"`  // Income portion still needed after pensions
+	NetMortgageRequired float64                   `json:"net_mortgage_required"` // Mortgage portion still needed
 	StatePension      float64                     `json:"state_pension"`
 	DBPension         float64                     `json:"db_pension"`
 	TaxPaid           float64                     `json:"tax_paid"`
@@ -1346,22 +1348,24 @@ func convertToAPISummary(result SimulationResult, includeYears bool, incomeInfla
 			}
 
 			yearSummary := APIYearSummary{
-				Year:              year.Year,
-				Ages:              year.Ages,
-				RequiredIncome:    year.RequiredIncome,
-				MortgageCost:      year.MortgageCost,
-				StatePension:      year.TotalStatePension,
-				DBPension:         year.TotalDBPension,
-				TaxPaid:           year.TotalTaxPaid,
-				NetIncome:         year.NetIncomeReceived,
-				TotalBalance:      year.TotalBalance,
-				Balances:          make(map[string]APIPersonBalance),
-				ISAWithdrawal:     isaWithdrawal,
-				PensionWithdrawal: pensionWithdrawal,
-				TaxFreeWithdrawal: taxFreeWithdrawal,
-				ISADeposit:        year.Withdrawals.TotalISADeposits,
-				PersonalAllowance: year.PersonalAllowance,
-				BasicRateLimit:    year.BasicRateLimit,
+				Year:                year.Year,
+				Ages:                year.Ages,
+				RequiredIncome:      year.RequiredIncome,
+				MortgageCost:        year.MortgageCost,
+				NetIncomeRequired:   year.NetIncomeRequired,
+				NetMortgageRequired: year.NetMortgageRequired,
+				StatePension:        year.TotalStatePension,
+				DBPension:           year.TotalDBPension,
+				TaxPaid:             year.TotalTaxPaid,
+				NetIncome:           year.NetIncomeReceived,
+				TotalBalance:        year.TotalBalance,
+				Balances:            make(map[string]APIPersonBalance),
+				ISAWithdrawal:       isaWithdrawal,
+				PensionWithdrawal:   pensionWithdrawal,
+				TaxFreeWithdrawal:   taxFreeWithdrawal,
+				ISADeposit:          year.Withdrawals.TotalISADeposits,
+				PersonalAllowance:   year.PersonalAllowance,
+				BasicRateLimit:      year.BasicRateLimit,
 			}
 			for name, bal := range year.EndBalances {
 				yearSummary.Balances[name] = APIPersonBalance{

@@ -1379,11 +1379,11 @@ func writeYearDetailsContent(f *os.File, year YearState, names []string) {
 	}
 
 	fmt.Fprintf(f, `                                <div class="detail-box">
-                                    <div class="detail-box-header">Mortgage</div>
+                                    <div class="detail-box-header">Net Income Needed</div>
                                     <div class="detail-box-value">%s</div>
                                 </div>
                                 <div class="detail-box">
-                                    <div class="detail-box-header">Net Needed</div>
+                                    <div class="detail-box-header">Net Mortgage</div>
                                     <div class="detail-box-value">%s</div>
                                 </div>
                                 <div class="detail-box">
@@ -1391,7 +1391,7 @@ func writeYearDetailsContent(f *os.File, year YearState, names []string) {
                                     <div class="detail-box-value negative">%s</div>
                                 </div>
                             </div>
-`, FormatMoney(year.MortgageCost), FormatMoney(year.NetRequired), FormatMoney(year.TotalTaxPaid))
+`, FormatMoney(year.NetIncomeRequired), FormatMoney(year.NetMortgageRequired), FormatMoney(year.TotalTaxPaid))
 
 	// Per-person extraction table
 	fmt.Fprintf(f, `                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
@@ -1532,10 +1532,16 @@ func writeDrawdownDetailsHTML(f *os.File, result SimulationResult, config *Confi
                         </div>`, FormatMoney(year.TotalDBPension))
 		}
 
+		// Show split Net Needed (income + mortgage)
+		netNeededLabel := "Net Income Needed"
+		if year.NetMortgageRequired > 0 {
+			netNeededLabel = fmt.Sprintf("Net Income: %s + Mortgage: %s", FormatMoney(year.NetIncomeRequired), FormatMoney(year.NetMortgageRequired))
+		}
+
 		fmt.Fprintf(f, `
                         <div style="background: var(--bg); padding: 0.5rem; border-radius: 4px;">
                             <div style="font-weight: 600;">%s</div>
-                            <div style="font-size: 0.75rem; color: var(--text-muted);">Net Needed from Savings</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">%s</div>
                         </div>
                     </div>
 
@@ -1551,7 +1557,7 @@ func writeDrawdownDetailsHTML(f *os.File, result SimulationResult, config *Confi
                             <th>To ISA</th>
                             <th>Tax Paid</th>
                         </tr>
-`, FormatMoney(year.NetRequired))
+`, FormatMoney(year.NetRequired), netNeededLabel)
 
 		for _, name := range names {
 			statePen := year.StatePensionByPerson[name]
@@ -2134,11 +2140,11 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
 			}
 
 			fmt.Fprintf(f, `                                    <div class="detail-box">
-                                        <div class="detail-box-header">Mortgage</div>
+                                        <div class="detail-box-header">Net Income Needed</div>
                                         <div class="detail-box-value">%s</div>
                                     </div>
                                     <div class="detail-box">
-                                        <div class="detail-box-header">Net Needed</div>
+                                        <div class="detail-box-header">Net Mortgage</div>
                                         <div class="detail-box-value">%s</div>
                                     </div>
                                     <div class="detail-box">
@@ -2158,7 +2164,7 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
                                                 <th>To ISA</th>
                                                 <th>Tax Paid</th>
                                             </tr>
-`, FormatMoney(year.MortgageCost), FormatMoney(year.NetRequired), FormatMoney(year.TotalTaxPaid))
+`, FormatMoney(year.NetIncomeRequired), FormatMoney(year.NetMortgageRequired), FormatMoney(year.TotalTaxPaid))
 
 			// Per-person extractions
 			for _, name := range names {

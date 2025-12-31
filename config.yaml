@@ -81,8 +81,8 @@ people:
       part_time_start_age: 55
       part_time_end_age: 60
 financial:
-    pension_growth_rate: 0.08
-    savings_growth_rate: 0.06
+    pension_growth_rate: 0.07
+    savings_growth_rate: 0.07
     income_inflation_rate: 0.03
     state_pension_amount: 12570
     state_pension_inflation: 0.03
@@ -98,11 +98,11 @@ financial:
     depletion_growth_decline_enabled: true
     depletion_growth_decline_percent: 0.03
 income_requirements:
-    monthly_before_age: 0
-    monthly_after_age: 0
-    target_depletion_age: 80
-    income_ratio_phase1: 5
-    income_ratio_phase2: 3
+    monthly_before_age: 6000
+    monthly_after_age: 4000
+    target_depletion_age: 0
+    income_ratio_phase1: 0
+    income_ratio_phase2: 0
     guardrails_enabled: false
     guardrails_upper_limit: 1.2
     guardrails_lower_limit: 0.8
