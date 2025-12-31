@@ -4501,15 +4501,40 @@ const webUIHTML = `<!DOCTYPE html>
             csv += 'Mode,' + escapeCSV(mode) + '\n';
             csv += 'Pension Growth Rate,' + pensionGrowth + '\n';
             csv += 'Savings Growth Rate,' + savingsGrowth + '\n';
+
+            // Sort results by best metric for the mode
+            const isDepletionMode = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
+            const sortedForExport = [...lastResults.results].sort((a, b) => {
+                if (isDepletionMode) {
+                    // Depletion modes: highest monthly income first
+                    return (b.monthly_income || 0) - (a.monthly_income || 0);
+                } else {
+                    // Fixed mode: lowest tax first
+                    return (a.total_tax_paid || 0) - (b.total_tax_paid || 0);
+                }
+            });
+
+            // Add best strategy header
+            if (sortedForExport.length > 0) {
+                const best = sortedForExport[0];
+                const bestName = best.descriptive_name || best.short_name;
+                csv += 'Best Strategy,' + escapeCSV(bestName) + '\n';
+                if (isDepletionMode && best.monthly_income) {
+                    csv += 'Max Monthly Income,' + formatMoneyCSV(best.monthly_income) + '\n';
+                } else {
+                    csv += 'Lowest Tax,' + formatMoneyCSV(best.total_tax_paid) + '\n';
+                }
+            }
             csv += '\n';
 
-            // Process each strategy
-            lastResults.results.forEach((r, idx) => {
+            // Process each strategy (sorted by best first)
+            sortedForExport.forEach((r, idx) => {
                 const strategyName = r.descriptive_name || r.short_name;
 
                 // Strategy header
                 csv += 'Strategy,' + escapeCSV(strategyName) + '\n';
                 csv += 'Total Tax Paid,' + formatMoneyCSV(r.total_tax_paid) + '\n';
+                csv += 'Total Income,' + formatMoneyCSV(r.total_income || 0) + '\n';
                 csv += 'Final Balance,' + formatMoneyCSV(r.final_balance) + '\n';
                 csv += 'Final ISA,' + formatMoneyCSV(r.final_isa || 0) + '\n';
                 if (r.monthly_income) csv += 'Monthly Income,' + formatMoneyCSV(r.monthly_income) + '\n';
