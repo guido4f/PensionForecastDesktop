@@ -414,6 +414,7 @@ type WithdrawalBreakdown struct {
 type YearState struct {
 	Year                 int
 	Ages                 map[string]int
+	StartBalance         float64 // Total balance at start of year (before withdrawals/growth)
 	RequiredIncome       float64
 	MortgageCost         float64
 	TotalRequired        float64

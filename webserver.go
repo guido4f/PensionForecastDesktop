@@ -1014,7 +1014,9 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 		return diff < 0.01 // Within 1%
 	}
 
-	// First pass: Find best among strategies that don't run out
+	// First pass: Find best among strategies
+	// For income optimization: consider all strategies (max income may come from one that runs out)
+	// For tax/balance optimization: only consider strategies that don't run out
 	for i, params := range strategies {
 		result := RunSimulation(params, config)
 		summary := convertToAPISummary(result, true, config.Financial.IncomeInflationRate)
@@ -1022,7 +1024,10 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 		results = append(results, summary)
 		simResults = append(simResults, result)
 
-		if !result.RanOutOfMoney {
+		// For income optimization, consider all strategies
+		// For tax/balance, only consider strategies that don't run out in first pass
+		shouldConsider := goal == OptimizeIncome || !result.RanOutOfMoney
+		if shouldConsider {
 			score, secondary, higherIsBetter, higherSecondary := calcScores(result.TotalTaxPaid, result.TotalWithdrawn, summary.TotalIncome, summary.FinalBalance)
 
 			// Determine if this is better
@@ -4502,27 +4507,49 @@ const webUIHTML = `<!DOCTYPE html>
             csv += 'Pension Growth Rate,' + pensionGrowth + '\n';
             csv += 'Savings Growth Rate,' + savingsGrowth + '\n';
 
-            // Sort results by best metric for the mode
+            // Sort results based on optimization goal
             const isDepletionMode = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
+            const optimizationGoal = document.getElementById('optimization-goal').value;
             const sortedForExport = [...lastResults.results].sort((a, b) => {
                 if (isDepletionMode) {
                     // Depletion modes: highest monthly income first
                     return (b.monthly_income || 0) - (a.monthly_income || 0);
                 } else {
-                    // Fixed mode: lowest tax first
-                    return (a.total_tax_paid || 0) - (b.total_tax_paid || 0);
+                    // Fixed mode: sort by optimization goal
+                    switch (optimizationGoal) {
+                        case 'income':
+                            // Higher total income is better
+                            return (b.total_income || 0) - (a.total_income || 0);
+                        case 'balance':
+                            // Higher final balance is better
+                            return (b.final_balance || 0) - (a.final_balance || 0);
+                        default: // 'tax'
+                            // Lower tax is better
+                            return (a.total_tax_paid || 0) - (b.total_tax_paid || 0);
+                    }
                 }
             });
 
-            // Add best strategy header
-            if (sortedForExport.length > 0) {
-                const best = sortedForExport[0];
+            // Add best strategy header - use server's best if available (respects optimization goal)
+            const serverBest = lastResults.best;
+            if (serverBest || sortedForExport.length > 0) {
+                const best = serverBest || sortedForExport[0];
                 const bestName = best.descriptive_name || best.short_name;
                 csv += 'Best Strategy,' + escapeCSV(bestName) + '\n';
                 if (isDepletionMode && best.monthly_income) {
                     csv += 'Max Monthly Income,' + formatMoneyCSV(best.monthly_income) + '\n';
                 } else {
-                    csv += 'Lowest Tax,' + formatMoneyCSV(best.total_tax_paid) + '\n';
+                    // Show metric based on optimization goal
+                    switch (optimizationGoal) {
+                        case 'income':
+                            csv += 'Total Income,' + formatMoneyCSV(best.total_income || 0) + '\n';
+                            break;
+                        case 'balance':
+                            csv += 'Final Balance,' + formatMoneyCSV(best.final_balance || 0) + '\n';
+                            break;
+                        default: // 'tax'
+                            csv += 'Lowest Tax,' + formatMoneyCSV(best.total_tax_paid) + '\n';
+                    }
                 }
             }
             csv += '\n';

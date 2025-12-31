@@ -149,6 +149,7 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		for _, p := range people {
 			currentPortfolio += p.TotalWealth()
 		}
+		state.StartBalance = currentPortfolio
 
 		// Calculate ages
 		for _, p := range people {
