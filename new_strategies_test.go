@@ -383,3 +383,97 @@ func TestGetStrategiesForConfig_IncludesNewStrategies(t *testing.T) {
 		t.Error("Mortgage config should have more strategies than non-mortgage")
 	}
 }
+
+// TestUFPLS_TaxOptimized_WithUncrystallisedOnly verifies UFPLS+TaxOptimized works
+// when person only has uncrystallised pot (regression test for bug where UFPLS
+// didn't include uncrystallised pot in available calculation)
+func TestUFPLS_TaxOptimized_WithUncrystallisedOnly(t *testing.T) {
+	person := &Person{
+		Name:              "Test",
+		BirthYear:         1965,
+		RetirementAge:     55,
+		UncrystallisedPot: 100000,
+		CrystallisedPot:   0, // No crystallised pot - only uncrystallised
+		TaxFreeSavings:    50000,
+		ISAAnnualLimit:    20000,
+	}
+	people := []*Person{person}
+
+	statePensionByPerson := map[string]float64{"Test": 0}
+	taxBands := ukTaxBands2024
+
+	netNeeded := 20000.0
+	year := 2025
+
+	// Use UFPLSStrategy with TaxOptimized (the bug was in proportionalPensionWithdrawals)
+	params := SimulationParams{
+		CrystallisationStrategy: UFPLSStrategy,
+		DrawdownOrder:           TaxOptimized,
+	}
+
+	breakdown := ExecuteDrawdown(people, netNeeded, params, year, statePensionByPerson, taxBands)
+
+	// Should have withdrawn from pension (uncrystallised pot)
+	totalWithdrawn := breakdown.TotalTaxFree + breakdown.TotalTaxable
+
+	// Bug: If UFPLS didn't include uncrystallised pot, totalWithdrawn would be 0
+	// and it would fall back to ISA only
+	if totalWithdrawn < netNeeded*0.5 {
+		t.Errorf("UFPLS+TaxOptimized should withdraw from pension: got £%.0f, expected ~£%.0f",
+			totalWithdrawn, netNeeded)
+	}
+
+	// Verify pension was used, not just ISA
+	pensionWithdrawn := breakdown.TotalTaxFree + breakdown.TotalTaxable - breakdown.TaxFreeFromISA["Test"]
+	if pensionWithdrawn < 1000 {
+		t.Errorf("UFPLS+TaxOptimized should use pension pot: pension withdrawn=£%.0f", pensionWithdrawn)
+	}
+
+	t.Logf("UFPLS+TaxOptimized: total=£%.0f, pension taxable=£%.0f, pension tax-free=£%.0f, ISA=£%.0f",
+		totalWithdrawn, breakdown.TaxableFromPension["Test"], breakdown.TaxFreeFromPension["Test"],
+		breakdown.TaxFreeFromISA["Test"])
+}
+
+// TestUFPLS_FillBasicRate verifies UFPLS+FillBasicRate works correctly
+func TestUFPLS_FillBasicRate(t *testing.T) {
+	person := &Person{
+		Name:              "Test",
+		BirthYear:         1965,
+		RetirementAge:     55,
+		UncrystallisedPot: 200000,
+		CrystallisedPot:   0,
+		TaxFreeSavings:    50000,
+		ISAAnnualLimit:    20000,
+	}
+	people := []*Person{person}
+
+	statePensionByPerson := map[string]float64{"Test": 0}
+	taxBands := ukTaxBands2024
+
+	netNeeded := 20000.0
+	year := 2025
+
+	params := SimulationParams{
+		CrystallisationStrategy: UFPLSStrategy,
+		DrawdownOrder:           FillBasicRate,
+	}
+
+	breakdown := ExecuteDrawdown(people, netNeeded, params, year, statePensionByPerson, taxBands)
+
+	// Should fill basic rate band
+	totalWithdrawn := breakdown.TotalTaxFree + breakdown.TotalTaxable
+
+	// UFPLS should be 25% tax-free
+	if totalWithdrawn > 0 {
+		taxFreeRatio := breakdown.TotalTaxFree / totalWithdrawn
+		if taxFreeRatio < 0.20 || taxFreeRatio > 0.30 {
+			t.Errorf("UFPLS+FillBasicRate tax-free ratio wrong: got %.1f%%, expected ~25%%",
+				taxFreeRatio*100)
+		}
+	}
+
+	t.Logf("UFPLS+FillBasicRate: total=£%.0f, tax-free=£%.0f (%.1f%%), taxable=£%.0f, ISA deposits=£%.0f",
+		totalWithdrawn, breakdown.TotalTaxFree,
+		breakdown.TotalTaxFree/totalWithdrawn*100,
+		breakdown.TotalTaxable, breakdown.TotalISADeposits)
+}

@@ -229,21 +229,21 @@ func ExecuteOptimizedDrawdown(people []*Person, netNeeded float64, strategy Stra
 		taxableAmount := plan.TaxableFromPension[p.Name]
 		taxFreeFromPension := plan.TaxFreeFromPension[p.Name]
 
-		// Tax-free from pension is from gradual crystallisation (25%)
-		// When crystallising: 25% is tax-free, 75% is taxable
-		if taxFreeFromPension > 0 && strategy == GradualCrystallisation {
+		// Tax-free from pension is from gradual crystallisation or UFPLS (25%)
+		// When crystallising/UFPLS: 25% is tax-free, 75% is taxable
+		if taxFreeFromPension > 0 && (strategy == GradualCrystallisation || strategy == UFPLSStrategy) {
 			// The amount crystallised = taxFreeFromPension / 0.25 = taxFreeFromPension * 4
 			amountCrystallised := taxFreeFromPension * 4
 			taxablePortion := amountCrystallised * 0.75
 
-			// Actually crystallise from uncrystallised pot
+			// Actually withdraw from uncrystallised pot
 			if p.UncrystallisedPot >= amountCrystallised {
 				p.UncrystallisedPot -= amountCrystallised
 				// 25% goes directly to breakdown as tax-free withdrawal
 				breakdown.TaxFreeFromPension[p.Name] = taxFreeFromPension
 				breakdown.TotalTaxFree += taxFreeFromPension
 
-				// 75% becomes crystallised pot, then withdrawn as taxable
+				// 75% is taxable
 				// The taxableAmount from plan already includes this, so just track it
 				breakdown.TaxableFromPension[p.Name] += taxablePortion
 				breakdown.TotalTaxable += taxablePortion
@@ -796,7 +796,12 @@ func ExecuteFillBasicRateDrawdown(people []*Person, netNeeded float64, strategy 
 		}
 
 		if amountToCrystallise > 0 {
-			result := GradualCrystallise(p, amountToCrystallise)
+			var result CrystallisationResult
+			if strategy == UFPLSStrategy {
+				result = UFPLSWithdraw(p, amountToCrystallise)
+			} else {
+				result = GradualCrystallise(p, amountToCrystallise)
+			}
 			breakdown.TaxFreeFromPension[p.Name] += result.TaxFreePortion
 			breakdown.TotalTaxFree += result.TaxFreePortion
 			breakdown.TaxableFromPension[p.Name] += result.TaxablePortion
@@ -915,7 +920,12 @@ func ExecuteStatePensionBridgeDrawdown(people []*Person, netNeeded float64, stra
 			}
 
 			if amountToCrystallise > 0 {
-				result := GradualCrystallise(p, amountToCrystallise)
+				var result CrystallisationResult
+				if strategy == UFPLSStrategy {
+					result = UFPLSWithdraw(p, amountToCrystallise)
+				} else {
+					result = GradualCrystallise(p, amountToCrystallise)
+				}
 				breakdown.TaxFreeFromPension[p.Name] += result.TaxFreePortion
 				breakdown.TotalTaxFree += result.TaxFreePortion
 				breakdown.TaxableFromPension[p.Name] += result.TaxablePortion

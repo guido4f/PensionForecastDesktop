@@ -680,7 +680,7 @@ func proportionalPensionWithdrawals(
 			continue
 		}
 		available := state.AvailableCrystallised
-		if strategy == GradualCrystallisation {
+		if strategy == GradualCrystallisation || strategy == UFPLSStrategy {
 			available += state.AvailableUncryst
 		}
 		totalAvailable += available
@@ -701,7 +701,7 @@ func proportionalPensionWithdrawals(
 		}
 
 		available := state.AvailableCrystallised
-		if strategy == GradualCrystallisation {
+		if strategy == GradualCrystallisation || strategy == UFPLSStrategy {
 			available += state.AvailableUncryst
 		}
 		if available <= 0.01 {
