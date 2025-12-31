@@ -112,8 +112,8 @@ func RunSensitivityAnalysis(config *Config, goal OptimizationGoal) *SensitivityA
 					// Primary: balance (higher better), Secondary: income (higher better)
 					return finalBalance, totalIncome, true, true
 				default: // OptimizeTax
-					// Primary: tax efficiency (lower better), Secondary: income (higher better)
-					return taxEfficiency, totalIncome, false, true
+					// Primary: total tax (lower better), Secondary: income (higher better)
+					return totalTax, totalIncome, false, true
 				}
 			}
 

@@ -281,11 +281,11 @@ func (ws *WebServer) handleSimulate(w http.ResponseWriter, r *http.Request) {
 
 	switch req.Mode {
 	case "depletion":
-		response = ws.runDepletionSimulation(config)
+		response = ws.runDepletionSimulation(config, goal)
 	case "pension-only":
-		response = ws.runPensionOnlySimulation(config)
+		response = ws.runPensionOnlySimulation(config, goal)
 	case "pension-to-isa":
-		response = ws.runPensionToISASimulation(config)
+		response = ws.runPensionToISASimulation(config, goal)
 	default: // "fixed" or empty
 		response = ws.runFixedSimulation(config, goal)
 	}
@@ -341,7 +341,8 @@ func (ws *WebServer) handleSimulateDepletion(w http.ResponseWriter, r *http.Requ
 		log.Printf("Warning: failed to save config: %v", err)
 	}
 
-	response := ws.runDepletionSimulation(config)
+	goal := parseOptimizationGoal(req.OptimizationGoal)
+	response := ws.runDepletionSimulation(config, goal)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -367,7 +368,8 @@ func (ws *WebServer) handleSimulatePensionOnly(w http.ResponseWriter, r *http.Re
 		log.Printf("Warning: failed to save config: %v", err)
 	}
 
-	response := ws.runPensionOnlySimulation(config)
+	goal := parseOptimizationGoal(req.OptimizationGoal)
+	response := ws.runPensionOnlySimulation(config, goal)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -393,7 +395,8 @@ func (ws *WebServer) handleSimulatePensionToISA(w http.ResponseWriter, r *http.R
 		log.Printf("Warning: failed to save config: %v", err)
 	}
 
-	response := ws.runPensionToISASimulation(config)
+	goal := parseOptimizationGoal(req.OptimizationGoal)
+	response := ws.runPensionToISASimulation(config, goal)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -980,8 +983,8 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 			// Primary: balance (higher better), Secondary: income (higher better)
 			return finalBalance, totalIncome, true, true
 		default: // OptimizeTax
-			// Primary: tax efficiency (lower better), Secondary: income (higher better)
-			return taxEfficiency, totalIncome, false, true
+			// Primary: total tax (lower better), Secondary: income (higher better)
+			return totalTax, totalIncome, false, true
 		}
 	}
 
@@ -1094,7 +1097,7 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 }
 
 // runDepletionSimulation runs depletion mode
-func (ws *WebServer) runDepletionSimulation(config *Config) APISimulationResponse {
+func (ws *WebServer) runDepletionSimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
 	if config.IncomeRequirements.TargetDepletionAge <= 0 {
 		return APISimulationResponse{
 			Success: false,
@@ -1105,17 +1108,76 @@ func (ws *WebServer) runDepletionSimulation(config *Config) APISimulationRespons
 	depletionResults := RunAllDepletionCalculations(config)
 
 	var results []APIResultSummary
+	var simResults []SimulationResult
 	var bestResult *APIResultSummary
-	bestIncome := 0.0
+	bestScore := -1.0
+	bestSecondaryScore := -1.0
+
+	// Helper to calculate primary and secondary scores based on goal
+	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
+		taxEfficiency := 1.0
+		if totalWithdrawn > 0 {
+			taxEfficiency = totalTax / totalWithdrawn
+		}
+		switch goal {
+		case OptimizeIncome:
+			return totalIncome, taxEfficiency, true, false
+		case OptimizeBalance:
+			return finalBalance, totalIncome, true, true
+		default: // OptimizeTax
+			return totalTax, totalIncome, false, true
+		}
+	}
+
+	// Check if two scores are "similar" (within 1%)
+	isSimilar := func(a, b float64) bool {
+		if a == 0 && b == 0 {
+			return true
+		}
+		if a == 0 || b == 0 {
+			return false
+		}
+		diff := (a - b) / a
+		if diff < 0 {
+			diff = -diff
+		}
+		return diff < 0.01
+	}
 
 	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
 		summary.StrategyIdx = i // Track original index for PDF export
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
 		results = append(results, summary)
+		simResults = append(simResults, dr.SimulationResult)
 
-		if dr.MonthlyBeforeAge > bestIncome {
-			bestIncome = dr.MonthlyBeforeAge
+		score, secondary, higherIsBetter, higherSecondary := calcScores(
+			dr.SimulationResult.TotalTaxPaid,
+			dr.SimulationResult.TotalWithdrawn,
+			summary.TotalIncome,
+			summary.FinalBalance,
+		)
+
+		// Determine if this is better
+		isBetter := false
+		if bestScore < 0 {
+			isBetter = true
+		} else if higherIsBetter && score > bestScore {
+			isBetter = true
+		} else if !higherIsBetter && score < bestScore {
+			isBetter = true
+		} else if isSimilar(score, bestScore) {
+			// Primary scores are similar, use secondary as tiebreaker
+			if higherSecondary && secondary > bestSecondaryScore {
+				isBetter = true
+			} else if !higherSecondary && secondary < bestSecondaryScore {
+				isBetter = true
+			}
+		}
+
+		if isBetter {
+			bestScore = score
+			bestSecondaryScore = secondary
 			bestCopy := summary
 			bestResult = &bestCopy
 		}
@@ -1130,7 +1192,7 @@ func (ws *WebServer) runDepletionSimulation(config *Config) APISimulationRespons
 }
 
 // runPensionOnlySimulation runs pension-only depletion mode
-func (ws *WebServer) runPensionOnlySimulation(config *Config) APISimulationResponse {
+func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
 	if config.IncomeRequirements.TargetDepletionAge <= 0 {
 		return APISimulationResponse{
 			Success: false,
@@ -1142,7 +1204,39 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config) APISimulationRespo
 
 	var results []APIResultSummary
 	var bestResult *APIResultSummary
-	bestIncome := 0.0
+	bestScore := -1.0
+	bestSecondaryScore := -1.0
+
+	// Helper to calculate primary and secondary scores based on goal
+	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
+		taxEfficiency := 1.0
+		if totalWithdrawn > 0 {
+			taxEfficiency = totalTax / totalWithdrawn
+		}
+		switch goal {
+		case OptimizeIncome:
+			return totalIncome, taxEfficiency, true, false
+		case OptimizeBalance:
+			return finalBalance, totalIncome, true, true
+		default: // OptimizeTax
+			return totalTax, totalIncome, false, true
+		}
+	}
+
+	// Check if two scores are "similar" (within 1%)
+	isSimilar := func(a, b float64) bool {
+		if a == 0 && b == 0 {
+			return true
+		}
+		if a == 0 || b == 0 {
+			return false
+		}
+		diff := (a - b) / a
+		if diff < 0 {
+			diff = -diff
+		}
+		return diff < 0.01
+	}
 
 	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
@@ -1152,8 +1246,33 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config) APISimulationRespo
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
 		results = append(results, summary)
 
-		if dr.MonthlyBeforeAge > bestIncome {
-			bestIncome = dr.MonthlyBeforeAge
+		score, secondary, higherIsBetter, higherSecondary := calcScores(
+			dr.SimulationResult.TotalTaxPaid,
+			dr.SimulationResult.TotalWithdrawn,
+			summary.TotalIncome,
+			summary.FinalBalance,
+		)
+
+		// Determine if this is better
+		isBetter := false
+		if bestScore < 0 {
+			isBetter = true
+		} else if higherIsBetter && score > bestScore {
+			isBetter = true
+		} else if !higherIsBetter && score < bestScore {
+			isBetter = true
+		} else if isSimilar(score, bestScore) {
+			// Primary scores are similar, use secondary as tiebreaker
+			if higherSecondary && secondary > bestSecondaryScore {
+				isBetter = true
+			} else if !higherSecondary && secondary < bestSecondaryScore {
+				isBetter = true
+			}
+		}
+
+		if isBetter {
+			bestScore = score
+			bestSecondaryScore = secondary
 			bestCopy := summary
 			bestResult = &bestCopy
 		}
@@ -1168,7 +1287,7 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config) APISimulationRespo
 }
 
 // runPensionToISASimulation runs pension-to-ISA mode
-func (ws *WebServer) runPensionToISASimulation(config *Config) APISimulationResponse {
+func (ws *WebServer) runPensionToISASimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
 	if config.IncomeRequirements.TargetDepletionAge <= 0 {
 		return APISimulationResponse{
 			Success: false,
@@ -1180,7 +1299,39 @@ func (ws *WebServer) runPensionToISASimulation(config *Config) APISimulationResp
 
 	var results []APIResultSummary
 	var bestResult *APIResultSummary
-	bestIncome := 0.0
+	bestScore := -1.0
+	bestSecondaryScore := -1.0
+
+	// Helper to calculate primary and secondary scores based on goal
+	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
+		taxEfficiency := 1.0
+		if totalWithdrawn > 0 {
+			taxEfficiency = totalTax / totalWithdrawn
+		}
+		switch goal {
+		case OptimizeIncome:
+			return totalIncome, taxEfficiency, true, false
+		case OptimizeBalance:
+			return finalBalance, totalIncome, true, true
+		default: // OptimizeTax
+			return totalTax, totalIncome, false, true
+		}
+	}
+
+	// Check if two scores are "similar" (within 1%)
+	isSimilar := func(a, b float64) bool {
+		if a == 0 && b == 0 {
+			return true
+		}
+		if a == 0 || b == 0 {
+			return false
+		}
+		diff := (a - b) / a
+		if diff < 0 {
+			diff = -diff
+		}
+		return diff < 0.01
+	}
 
 	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
@@ -1190,8 +1341,33 @@ func (ws *WebServer) runPensionToISASimulation(config *Config) APISimulationResp
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
 		results = append(results, summary)
 
-		if dr.MonthlyBeforeAge > bestIncome {
-			bestIncome = dr.MonthlyBeforeAge
+		score, secondary, higherIsBetter, higherSecondary := calcScores(
+			dr.SimulationResult.TotalTaxPaid,
+			dr.SimulationResult.TotalWithdrawn,
+			summary.TotalIncome,
+			summary.FinalBalance,
+		)
+
+		// Determine if this is better
+		isBetter := false
+		if bestScore < 0 {
+			isBetter = true
+		} else if higherIsBetter && score > bestScore {
+			isBetter = true
+		} else if !higherIsBetter && score < bestScore {
+			isBetter = true
+		} else if isSimilar(score, bestScore) {
+			// Primary scores are similar, use secondary as tiebreaker
+			if higherSecondary && secondary > bestSecondaryScore {
+				isBetter = true
+			} else if !higherSecondary && secondary < bestSecondaryScore {
+				isBetter = true
+			}
+		}
+
+		if isBetter {
+			bestScore = score
+			bestSecondaryScore = secondary
 			bestCopy := summary
 			bestResult = &bestCopy
 		}
