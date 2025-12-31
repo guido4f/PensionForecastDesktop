@@ -2449,7 +2449,7 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>Birth Date</label>
-                                    <input type="date" id="p1-birth" value="1970-12-15">
+                                    <input type="text" id="p1-birth" value="1970-12-15" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
                                 </div>
                             </div>
                             <div class="form-row-4">
@@ -2560,7 +2560,7 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>Birth Date</label>
-                                    <input type="date" id="p2-birth" value="1975-01-13">
+                                    <input type="text" id="p2-birth" value="1975-01-13" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
                                 </div>
                             </div>
                             <div class="form-row-4">
