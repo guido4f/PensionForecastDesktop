@@ -169,6 +169,8 @@ func ProportionalSplit(totalNeeded float64, person1Available, person2Available f
 // For TaxOptimized: Uses optimal mix to minimize tax burden
 // For PensionToISA: Over-draw pension to fill tax bands, excess to ISA
 // For PensionOnly: Only use pension, never touch ISAs (for pension-only depletion)
+// For FillBasicRate: Withdraw pension up to basic rate limit, excess to ISA
+// For StatePensionBridge: Draw heavily before state pension, reduce after
 // netNeeded is the after-tax amount required - taxable withdrawals are grossed up
 func ExecuteDrawdown(people []*Person, netNeeded float64, params SimulationParams, year int, statePensionByPerson map[string]float64, taxBands []TaxBand) WithdrawalBreakdown {
 	breakdown := NewWithdrawalBreakdown()
@@ -184,6 +186,12 @@ func ExecuteDrawdown(people []*Person, netNeeded float64, params SimulationParam
 		// Only use pension, never touch ISAs
 		withdrawFromPensionGrossedUp(people, remaining, params.CrystallisationStrategy, year, &breakdown, statePensionByPerson, taxBands)
 		return breakdown
+	} else if params.DrawdownOrder == FillBasicRate {
+		// Fill basic rate band from pension, excess to ISA (controlled version of PensionToISA)
+		return ExecuteFillBasicRateDrawdown(people, netNeeded, params.CrystallisationStrategy, year, statePensionByPerson, taxBands)
+	} else if params.DrawdownOrder == StatePensionBridge {
+		// Draw heavily before state pension, reduce after
+		return ExecuteStatePensionBridgeDrawdown(people, netNeeded, params.CrystallisationStrategy, year, statePensionByPerson, taxBands)
 	} else if params.DrawdownOrder == SavingsFirst {
 		// Order: ISAs first, then pension
 		remaining = withdrawFromISAs(people, remaining, &breakdown)
@@ -738,41 +746,313 @@ func ExecutePensionToISADrawdown(people []*Person, netNeeded float64, strategy S
 	return breakdown
 }
 
+// ExecuteFillBasicRateDrawdown withdraws from pension to fill the basic rate band exactly
+// This crystallizes tax at 20% now rather than potentially 40% later
+// Any excess goes to ISA, shortfall is covered from ISA
+func ExecuteFillBasicRateDrawdown(people []*Person, netNeeded float64, strategy Strategy, year int, statePensionByPerson map[string]float64, taxBands []TaxBand) WithdrawalBreakdown {
+	breakdown := NewWithdrawalBreakdown()
+
+	// Get personal allowance and basic rate limit from (inflated) tax bands
+	personalAllowance := 12570.0 // Default fallback
+	basicRateLimit := 50270.0    // Default fallback
+
+	if len(taxBands) > 0 && taxBands[0].Rate == 0 {
+		personalAllowance = taxBands[0].Upper
+	}
+	if len(taxBands) > 1 && taxBands[1].Rate == 0.20 {
+		basicRateLimit = taxBands[1].Upper
+	}
+
+	// For each person, withdraw pension to fill exactly to basic rate limit (not beyond)
+	for _, p := range people {
+		if !p.CanAccessPension(year) {
+			continue
+		}
+
+		statePension := statePensionByPerson[p.Name]
+
+		// Calculate space available up to basic rate limit (not beyond)
+		personalAllowanceSpace := math.Max(0, personalAllowance-statePension)
+		basicRateSpace := math.Max(0, basicRateLimit-math.Max(statePension, personalAllowance))
+
+		// Target: fill exactly to basic rate limit
+		targetTaxableWithdrawal := personalAllowanceSpace + basicRateSpace
+
+		if targetTaxableWithdrawal <= 0 {
+			continue
+		}
+
+		// Calculate how much we need to crystallise to get this taxable amount
+		var amountToCrystallise float64
+		if p.PCLSTaken {
+			amountToCrystallise = targetTaxableWithdrawal
+		} else {
+			// 25% tax-free, 75% taxable: to get X taxable, crystallise X/0.75
+			amountToCrystallise = targetTaxableWithdrawal / 0.75
+		}
+
+		if amountToCrystallise > p.UncrystallisedPot {
+			amountToCrystallise = p.UncrystallisedPot
+		}
+
+		if amountToCrystallise > 0 {
+			result := GradualCrystallise(p, amountToCrystallise)
+			breakdown.TaxFreeFromPension[p.Name] += result.TaxFreePortion
+			breakdown.TotalTaxFree += result.TaxFreePortion
+			breakdown.TaxableFromPension[p.Name] += result.TaxablePortion
+			breakdown.TotalTaxable += result.TaxablePortion
+		}
+
+		// Also withdraw from crystallised pot if available and haven't reached target
+		if p.CrystallisedPot > 0 && breakdown.TaxableFromPension[p.Name] < targetTaxableWithdrawal {
+			needed := targetTaxableWithdrawal - breakdown.TaxableFromPension[p.Name]
+			withdrawal := math.Min(needed, p.CrystallisedPot)
+			if withdrawal > 0 {
+				actual := WithdrawFromCrystallised(p, withdrawal)
+				breakdown.TaxableFromPension[p.Name] += actual
+				breakdown.TotalTaxable += actual
+			}
+		}
+	}
+
+	// Calculate net income from pension withdrawals
+	totalGrossWithdrawn := breakdown.TotalTaxFree + breakdown.TotalTaxable
+	totalTaxPaid := 0.0
+	for _, p := range people {
+		statePension := statePensionByPerson[p.Name]
+		taxableWithdrawal := breakdown.TaxableFromPension[p.Name]
+		totalIncome := statePension + taxableWithdrawal
+		totalTaxPaid += CalculateTaxOnIncome(totalIncome, taxBands)
+	}
+	netFromPension := totalGrossWithdrawn - totalTaxPaid
+
+	// If excess, deposit to ISA
+	excess := netFromPension - netNeeded
+	if excess > 0 {
+		for _, p := range people {
+			if excess <= 0 {
+				break
+			}
+			isaDeposit := math.Min(excess, p.ISAAnnualLimit)
+			p.TaxFreeSavings += isaDeposit
+			breakdown.ISADeposits[p.Name] = isaDeposit
+			breakdown.TotalISADeposits += isaDeposit
+			excess -= isaDeposit
+		}
+	} else if netFromPension < netNeeded {
+		// Shortfall - cover from ISA first
+		shortfall := netNeeded - netFromPension
+		for _, p := range people {
+			if shortfall <= 0 || p.TaxFreeSavings <= 0 {
+				continue
+			}
+			withdrawal := math.Min(shortfall, p.TaxFreeSavings)
+			actual := WithdrawFromISA(p, withdrawal)
+			breakdown.TaxFreeFromISA[p.Name] += actual
+			breakdown.TotalTaxFree += actual
+			shortfall -= actual
+		}
+
+		// If still short, draw more from pension (at higher rates)
+		if shortfall > 1 {
+			_ = withdrawFromPensionGrossedUp(people, shortfall, strategy, year,
+				&breakdown, statePensionByPerson, taxBands)
+		}
+	}
+
+	return breakdown
+}
+
+// ExecuteStatePensionBridgeDrawdown draws heavily from private pension before state pension starts
+// to maximize use of personal allowance, then reduces private pension withdrawals after
+func ExecuteStatePensionBridgeDrawdown(people []*Person, netNeeded float64, strategy Strategy, year int, statePensionByPerson map[string]float64, taxBands []TaxBand) WithdrawalBreakdown {
+	breakdown := NewWithdrawalBreakdown()
+
+	if netNeeded <= 0 {
+		return breakdown
+	}
+
+	// Get personal allowance from (inflated) tax bands
+	personalAllowance := 12570.0 // Default fallback
+	basicRateLimit := 50270.0    // Default fallback
+
+	if len(taxBands) > 0 && taxBands[0].Rate == 0 {
+		personalAllowance = taxBands[0].Upper
+	}
+	if len(taxBands) > 1 && taxBands[1].Rate == 0.20 {
+		basicRateLimit = taxBands[1].Upper
+	}
+
+	// Check if any person is receiving state pension this year
+	anyReceivingStatePension := false
+	for _, p := range people {
+		if statePensionByPerson[p.Name] > 0 {
+			anyReceivingStatePension = true
+			break
+		}
+	}
+
+	if !anyReceivingStatePension {
+		// BEFORE state pension: Draw heavily from private pension to use full personal allowance
+		// Fill up to basic rate limit from pension (similar to FillBasicRate)
+		for _, p := range people {
+			if !p.CanAccessPension(year) {
+				continue
+			}
+
+			// Target: fill personal allowance fully, plus basic rate band
+			targetTaxableWithdrawal := personalAllowance + (basicRateLimit - personalAllowance)
+
+			var amountToCrystallise float64
+			if p.PCLSTaken {
+				amountToCrystallise = targetTaxableWithdrawal
+			} else {
+				amountToCrystallise = targetTaxableWithdrawal / 0.75
+			}
+
+			if amountToCrystallise > p.UncrystallisedPot {
+				amountToCrystallise = p.UncrystallisedPot
+			}
+
+			if amountToCrystallise > 0 {
+				result := GradualCrystallise(p, amountToCrystallise)
+				breakdown.TaxFreeFromPension[p.Name] += result.TaxFreePortion
+				breakdown.TotalTaxFree += result.TaxFreePortion
+				breakdown.TaxableFromPension[p.Name] += result.TaxablePortion
+				breakdown.TotalTaxable += result.TaxablePortion
+			}
+
+			// Draw from crystallised pot too
+			if p.CrystallisedPot > 0 && breakdown.TaxableFromPension[p.Name] < targetTaxableWithdrawal {
+				needed := targetTaxableWithdrawal - breakdown.TaxableFromPension[p.Name]
+				withdrawal := math.Min(needed, p.CrystallisedPot)
+				if withdrawal > 0 {
+					actual := WithdrawFromCrystallised(p, withdrawal)
+					breakdown.TaxableFromPension[p.Name] += actual
+					breakdown.TotalTaxable += actual
+				}
+			}
+		}
+	} else {
+		// AFTER state pension starts: Use pension first strategy (state pension uses some allowance)
+		// Only withdraw what's needed, pension first then ISA
+		remaining := netNeeded
+		remaining = withdrawFromPensionGrossedUp(people, remaining, strategy, year, &breakdown, statePensionByPerson, taxBands)
+		if remaining > 0 {
+			remaining = withdrawFromISAs(people, remaining, &breakdown)
+		}
+		return breakdown
+	}
+
+	// Calculate net income from pension withdrawals (for pre-state-pension case)
+	totalGrossWithdrawn := breakdown.TotalTaxFree + breakdown.TotalTaxable
+	totalTaxPaid := 0.0
+	for _, p := range people {
+		statePension := statePensionByPerson[p.Name]
+		taxableWithdrawal := breakdown.TaxableFromPension[p.Name]
+		totalIncome := statePension + taxableWithdrawal
+		totalTaxPaid += CalculateTaxOnIncome(totalIncome, taxBands)
+	}
+	netFromPension := totalGrossWithdrawn - totalTaxPaid
+
+	// If excess, deposit to ISA (preserves for later when state pension takes allowance)
+	excess := netFromPension - netNeeded
+	if excess > 0 {
+		for _, p := range people {
+			if excess <= 0 {
+				break
+			}
+			isaDeposit := math.Min(excess, p.ISAAnnualLimit)
+			p.TaxFreeSavings += isaDeposit
+			breakdown.ISADeposits[p.Name] = isaDeposit
+			breakdown.TotalISADeposits += isaDeposit
+			excess -= isaDeposit
+		}
+	} else if netFromPension < netNeeded {
+		// Shortfall - cover from ISA
+		shortfall := netNeeded - netFromPension
+		for _, p := range people {
+			if shortfall <= 0 || p.TaxFreeSavings <= 0 {
+				continue
+			}
+			withdrawal := math.Min(shortfall, p.TaxFreeSavings)
+			actual := WithdrawFromISA(p, withdrawal)
+			breakdown.TaxFreeFromISA[p.Name] += actual
+			breakdown.TotalTaxFree += actual
+			shortfall -= actual
+		}
+
+		// If still short, draw more from pension
+		if shortfall > 1 {
+			_ = withdrawFromPensionGrossedUp(people, shortfall, strategy, year,
+				&breakdown, statePensionByPerson, taxBands)
+		}
+	}
+
+	return breakdown
+}
+
 // GetStrategiesForConfig returns the appropriate simulation strategies based on config
 // If there's no mortgage, only returns strategies with MortgageNormal (no point testing different payoff options)
 func GetStrategiesForConfig(config *Config) []SimulationParams {
 	if config.HasMortgage() {
 		// Full set of strategies with all mortgage options
 		return []SimulationParams{
+			// === GRADUAL CRYSTALLISATION STRATEGIES ===
 			// Early payoff strategies
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageEarly},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageEarly},
 			// Normal payoff strategies
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
 			// Extended (+10 years) payoff strategies
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageExtended},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageExtended},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageExtended},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageExtended},
 			// PCLS mortgage payoff (use 25% lump sum, no further tax-free)
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: PCLSMortgagePayoff},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: PCLSMortgagePayoff},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: PCLSMortgagePayoff},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: PCLSMortgagePayoff},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: PCLSMortgagePayoff},
+
+			// === UFPLS STRATEGIES (25% tax-free on each withdrawal) ===
+			// Normal payoff only for UFPLS to keep combinations manageable
+			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
 		}
 	}
 
 	// No mortgage - only test drawdown order strategies (mortgage options are irrelevant)
 	return []SimulationParams{
+		// Gradual Crystallisation
 		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
 		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
 		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
 		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
+		// UFPLS
+		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
 	}
 }
 
@@ -789,6 +1069,7 @@ func GetPensionOnlyStrategiesForConfig(config *Config) []SimulationParams {
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: PCLSMortgagePayoff},
 		}
 	}
 	return []SimulationParams{
@@ -803,6 +1084,7 @@ func GetPensionToISAStrategiesForConfig(config *Config) []SimulationParams {
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
 		}
 	}
 	return []SimulationParams{

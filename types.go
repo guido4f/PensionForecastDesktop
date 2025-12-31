@@ -47,11 +47,13 @@ func (s Strategy) String() string {
 type DrawdownOrder int
 
 const (
-	SavingsFirst  DrawdownOrder = iota // Use ISAs first, then pension
-	PensionFirst                       // Use pension first, save ISAs for last
-	TaxOptimized                       // Optimize withdrawal mix to minimize tax
-	PensionToISA                       // Over-draw pension to fill tax bands, excess to ISA
-	PensionOnly                        // Only use pension, never touch ISAs (for pension-only depletion)
+	SavingsFirst       DrawdownOrder = iota // Use ISAs first, then pension
+	PensionFirst                            // Use pension first, save ISAs for last
+	TaxOptimized                            // Optimize withdrawal mix to minimize tax
+	PensionToISA                            // Over-draw pension to fill tax bands, excess to ISA
+	PensionOnly                             // Only use pension, never touch ISAs (for pension-only depletion)
+	FillBasicRate                           // Withdraw from pension up to basic rate limit, excess to ISA
+	StatePensionBridge                      // Draw heavily before state pension, reduce after
 )
 
 func (d DrawdownOrder) String() string {
@@ -66,6 +68,10 @@ func (d DrawdownOrder) String() string {
 		return "Pension to ISA"
 	case PensionOnly:
 		return "Pension Only"
+	case FillBasicRate:
+		return "Fill Basic Rate"
+	case StatePensionBridge:
+		return "State Pension Bridge"
 	default:
 		return "Unknown"
 	}
@@ -114,7 +120,17 @@ func (sp SimulationParams) ShortName() string {
 		orderShort = "Combined"
 	} else if sp.DrawdownOrder == PensionOnly {
 		orderShort = "PenOnly"
+	} else if sp.DrawdownOrder == FillBasicRate {
+		orderShort = "FillBasic"
+	} else if sp.DrawdownOrder == StatePensionBridge {
+		orderShort = "SPBridge"
 	}
+
+	// Prefix with U/ for UFPLS
+	if sp.CrystallisationStrategy == UFPLSStrategy {
+		orderShort = "U/" + orderShort
+	}
+
 	switch sp.MortgageOpt {
 	case MortgageEarly:
 		return orderShort + "/Early"
@@ -141,8 +157,17 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 		drawdownDesc = "Combined ISA And Pension"
 	case PensionOnly:
 		drawdownDesc = "Pension Only"
+	case FillBasicRate:
+		drawdownDesc = "Fill Basic Rate Band"
+	case StatePensionBridge:
+		drawdownDesc = "State Pension Bridge"
 	default:
 		drawdownDesc = "Unknown Strategy"
+	}
+
+	// Add crystallisation type if UFPLS
+	if sp.CrystallisationStrategy == UFPLSStrategy {
+		drawdownDesc = "UFPLS " + drawdownDesc
 	}
 
 	// Only add mortgage description if there is a mortgage (year > 0)
