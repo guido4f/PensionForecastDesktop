@@ -469,14 +469,15 @@ func (ws *WebServer) handleSensitivityGrid(w http.ResponseWriter, r *http.Reques
 		log.Printf("Warning: failed to save config: %v", err)
 	}
 
-	response := ws.runSensitivityGrid(config, req.Mode)
+	goal := parseOptimizationGoal(req.OptimizationGoal)
+	response := ws.runSensitivityGrid(config, req.Mode, goal)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
 
 // runSensitivityGrid runs sensitivity analysis based on mode
-func (ws *WebServer) runSensitivityGrid(config *Config, mode string) APISensitivityResponse {
+func (ws *WebServer) runSensitivityGrid(config *Config, mode string, goal OptimizationGoal) APISensitivityResponse {
 	// Build growth rate arrays
 	pensionRates := buildGrowthRates(config.Sensitivity.PensionGrowthMin, config.Sensitivity.PensionGrowthMax, config.Sensitivity.StepSize)
 	savingsRates := buildGrowthRates(config.Sensitivity.SavingsGrowthMin, config.Sensitivity.SavingsGrowthMax, config.Sensitivity.StepSize)
@@ -519,7 +520,7 @@ func (ws *WebServer) runSensitivityGrid(config *Config, mode string) APISensitiv
 		}
 	} else {
 		// Run fixed income sensitivity analysis
-		analysis := RunSensitivityAnalysis(config)
+		analysis := RunSensitivityAnalysis(config, goal)
 
 		// Map results to grid
 		for pi, pensionRow := range analysis.Results {

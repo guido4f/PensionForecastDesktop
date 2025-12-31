@@ -90,7 +90,7 @@ financial:
     state_pension_deferral_rate: 0
     emergency_fund_months: 0
     emergency_fund_inflation_adjust: false
-    growth_decline_enabled: true
+    growth_decline_enabled: false
     pension_growth_end_rate: 0.04
     savings_growth_end_rate: 0.04
     growth_decline_target_age: 80
@@ -98,8 +98,8 @@ financial:
     depletion_growth_decline_enabled: true
     depletion_growth_decline_percent: 0.03
 income_requirements:
-    monthly_before_age: 6000
-    monthly_after_age: 4000
+    monthly_before_age: 5000
+    monthly_after_age: 3000
     target_depletion_age: 0
     income_ratio_phase1: 0
     income_ratio_phase2: 0

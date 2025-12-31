@@ -394,7 +394,8 @@ func runConsoleMode(configFile string, showDetails, showDrawdown bool, yearDetai
 		fmt.Printf("\nRunning sensitivity analysis (pension %.0f%%-%.0f%%, savings %.0f%%-%.0f%%)...\n",
 			config.Sensitivity.PensionGrowthMin*100, config.Sensitivity.PensionGrowthMax*100,
 			config.Sensitivity.SavingsGrowthMin*100, config.Sensitivity.SavingsGrowthMax*100)
-		analysis := RunSensitivityAnalysis(config)
+		// Console mode defaults to maximizing final balance
+		analysis := RunSensitivityAnalysis(config, OptimizeBalance)
 		sensitivityReport, err := GenerateSensitivityReport(analysis)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating sensitivity report: %v\n", err)

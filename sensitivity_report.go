@@ -45,7 +45,8 @@ func buildGrowthRates(min, max, step float64) []float64 {
 }
 
 // RunSensitivityAnalysis runs simulations across a range of growth rates
-func RunSensitivityAnalysis(config *Config) *SensitivityAnalysis {
+// Uses the provided optimization goal to determine the "best" strategy for each cell
+func RunSensitivityAnalysis(config *Config, goal OptimizationGoal) *SensitivityAnalysis {
 	// Use config for growth rate ranges, with defaults if not set
 	pensionMin := config.Sensitivity.PensionGrowthMin
 	pensionMax := config.Sensitivity.PensionGrowthMax
@@ -96,40 +97,85 @@ func RunSensitivityAnalysis(config *Config) *SensitivityAnalysis {
 			testConfig.Financial.PensionGrowthRate = pensionRate
 			testConfig.Financial.SavingsGrowthRate = savingsRate
 
+			// Helper to calculate score based on optimization goal
+			calcScore := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (score float64, higherIsBetter bool) {
+				switch goal {
+				case OptimizeIncome:
+					return totalIncome, true
+				case OptimizeBalance:
+					return finalBalance, true
+				default: // OptimizeTax
+					if totalWithdrawn > 0 {
+						return totalTax / totalWithdrawn, false
+					}
+					return 1.0, false
+				}
+			}
+
 			// Run all strategies
 			var bestIdx int = -1
-			var bestBalance float64 = -1
+			var bestScore float64 = -1
 			var longestYear int = 0
 			var longestIdx int = 0
 
 			var simResults []SimulationResult
-			for _, params := range strategies {
+			for i, params := range strategies {
 				result := RunSimulation(params, &testConfig)
 				simResults = append(simResults, result)
 
 				// Track longest lasting
 				if result.RanOutYear > longestYear {
 					longestYear = result.RanOutYear
-					longestIdx = len(simResults) - 1
+					longestIdx = i
 				}
 
-				// Find best (highest final balance among those that don't truly deplete)
-				// "Shortfall" (RanOutOfMoney=true but still has significant balance) is acceptable
+				// Calculate final balance and total income
 				finalBal := 0.0
 				for _, bal := range result.FinalBalances {
 					finalBal += bal.TaxFreeSavings + bal.CrystallisedPot + bal.UncrystallisedPot
 				}
-				// Accept if: not ran out, OR ran out but still has significant balance (shortfall not depletion)
-				isAcceptable := !result.RanOutOfMoney || finalBal > 1000
-				if isAcceptable {
-					if bestBalance < 0 || finalBal > bestBalance {
-						bestBalance = finalBal
-						bestIdx = len(simResults) - 1
+				// Calculate total income from yearly data
+				totalIncome := 0.0
+				for _, year := range result.Years {
+					totalIncome += year.NetIncomeReceived
+				}
+
+				// First pass: Find best among strategies that don't run out
+				if !result.RanOutOfMoney {
+					score, higherIsBetter := calcScore(result.TotalTaxPaid, result.TotalWithdrawn, totalIncome, finalBal)
+					isBetter := bestScore < 0 || (higherIsBetter && score > bestScore) || (!higherIsBetter && score < bestScore)
+					if isBetter {
+						bestScore = score
+						bestIdx = i
 					}
 				}
 			}
 
-			// If all truly depleted, use longest lasting
+			// Second pass: If all ran out, prefer strategies with positive final balance
+			if bestIdx < 0 {
+				bestScore = -1
+				for i, result := range simResults {
+					finalBal := 0.0
+					for _, bal := range result.FinalBalances {
+						finalBal += bal.TaxFreeSavings + bal.CrystallisedPot + bal.UncrystallisedPot
+					}
+					if finalBal > 1000 {
+						// Calculate total income from yearly data
+						totalIncome := 0.0
+						for _, year := range result.Years {
+							totalIncome += year.NetIncomeReceived
+						}
+						score, higherIsBetter := calcScore(result.TotalTaxPaid, result.TotalWithdrawn, totalIncome, finalBal)
+						isBetter := bestScore < 0 || (higherIsBetter && score > bestScore) || (!higherIsBetter && score < bestScore)
+						if isBetter {
+							bestScore = score
+							bestIdx = i
+						}
+					}
+				}
+			}
+
+			// Third pass: If still no best (all have zero balance), pick longest-lasting
 			allRunOut := bestIdx < 0
 			if allRunOut {
 				bestIdx = longestIdx
