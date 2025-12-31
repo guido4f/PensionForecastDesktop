@@ -963,20 +963,41 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 	var simResults []SimulationResult // Store raw results for second pass
 	var bestResult *APIResultSummary
 	bestScore := -1.0
+	bestSecondaryScore := -1.0
 
-	// Helper to calculate score based on goal
-	calcScore := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (score float64, higherIsBetter bool) {
+	// Helper to calculate primary and secondary scores based on goal
+	// Returns: primaryScore, secondaryScore, higherIsBetterPrimary, higherIsBetterSecondary
+	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
+		taxEfficiency := 1.0
+		if totalWithdrawn > 0 {
+			taxEfficiency = totalTax / totalWithdrawn
+		}
 		switch goal {
 		case OptimizeIncome:
-			return totalIncome, true // Use NET income, not gross withdrawals
+			// Primary: income (higher better), Secondary: tax efficiency (lower better)
+			return totalIncome, taxEfficiency, true, false
 		case OptimizeBalance:
-			return finalBalance, true
+			// Primary: balance (higher better), Secondary: income (higher better)
+			return finalBalance, totalIncome, true, true
 		default: // OptimizeTax
-			if totalWithdrawn > 0 {
-				return totalTax / totalWithdrawn, false
-			}
-			return 1.0, false
+			// Primary: tax efficiency (lower better), Secondary: income (higher better)
+			return taxEfficiency, totalIncome, false, true
 		}
+	}
+
+	// Check if two scores are "similar" (within 1%)
+	isSimilar := func(a, b float64) bool {
+		if a == 0 && b == 0 {
+			return true
+		}
+		if a == 0 || b == 0 {
+			return false
+		}
+		diff := (a - b) / a
+		if diff < 0 {
+			diff = -diff
+		}
+		return diff < 0.01 // Within 1%
 	}
 
 	// First pass: Find best among strategies that don't run out
@@ -988,11 +1009,28 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 		simResults = append(simResults, result)
 
 		if !result.RanOutOfMoney {
-			score, higherIsBetter := calcScore(result.TotalTaxPaid, result.TotalWithdrawn, summary.TotalIncome, summary.FinalBalance)
-			isBetter := bestScore < 0 || (higherIsBetter && score > bestScore) || (!higherIsBetter && score < bestScore)
+			score, secondary, higherIsBetter, higherSecondary := calcScores(result.TotalTaxPaid, result.TotalWithdrawn, summary.TotalIncome, summary.FinalBalance)
+
+			// Determine if this is better
+			isBetter := false
+			if bestScore < 0 {
+				isBetter = true
+			} else if higherIsBetter && score > bestScore {
+				isBetter = true
+			} else if !higherIsBetter && score < bestScore {
+				isBetter = true
+			} else if isSimilar(score, bestScore) {
+				// Primary scores are similar, use secondary as tiebreaker
+				if higherSecondary && secondary > bestSecondaryScore {
+					isBetter = true
+				} else if !higherSecondary && secondary < bestSecondaryScore {
+					isBetter = true
+				}
+			}
 
 			if isBetter {
 				bestScore = score
+				bestSecondaryScore = secondary
 				bestCopy := summary
 				bestResult = &bestCopy
 			}
@@ -1002,14 +1040,32 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 	// Second pass: If all ran out, prefer strategies with positive final balance
 	if bestResult == nil {
 		bestScore = -1.0
+		bestSecondaryScore = -1.0
 		for i, r := range results {
 			// Only consider strategies with positive final balance
 			if r.FinalBalance > 1000 {
-				score, higherIsBetter := calcScore(simResults[i].TotalTaxPaid, simResults[i].TotalWithdrawn, r.TotalIncome, r.FinalBalance)
-				isBetter := bestScore < 0 || (higherIsBetter && score > bestScore) || (!higherIsBetter && score < bestScore)
+				score, secondary, higherIsBetter, higherSecondary := calcScores(simResults[i].TotalTaxPaid, simResults[i].TotalWithdrawn, r.TotalIncome, r.FinalBalance)
+
+				// Determine if this is better
+				isBetter := false
+				if bestScore < 0 {
+					isBetter = true
+				} else if higherIsBetter && score > bestScore {
+					isBetter = true
+				} else if !higherIsBetter && score < bestScore {
+					isBetter = true
+				} else if isSimilar(score, bestScore) {
+					// Primary scores are similar, use secondary as tiebreaker
+					if higherSecondary && secondary > bestSecondaryScore {
+						isBetter = true
+					} else if !higherSecondary && secondary < bestSecondaryScore {
+						isBetter = true
+					}
+				}
 
 				if isBetter {
 					bestScore = score
+					bestSecondaryScore = secondary
 					bestCopy := results[i]
 					bestResult = &bestCopy
 				}

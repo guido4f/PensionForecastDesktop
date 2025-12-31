@@ -97,24 +97,45 @@ func RunSensitivityAnalysis(config *Config, goal OptimizationGoal) *SensitivityA
 			testConfig.Financial.PensionGrowthRate = pensionRate
 			testConfig.Financial.SavingsGrowthRate = savingsRate
 
-			// Helper to calculate score based on optimization goal
-			calcScore := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (score float64, higherIsBetter bool) {
+			// Helper to calculate primary and secondary scores based on goal
+			// Returns: primaryScore, secondaryScore, higherIsBetterPrimary, higherIsBetterSecondary
+			calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
+				taxEfficiency := 1.0
+				if totalWithdrawn > 0 {
+					taxEfficiency = totalTax / totalWithdrawn
+				}
 				switch goal {
 				case OptimizeIncome:
-					return totalIncome, true
+					// Primary: income (higher better), Secondary: tax efficiency (lower better)
+					return totalIncome, taxEfficiency, true, false
 				case OptimizeBalance:
-					return finalBalance, true
+					// Primary: balance (higher better), Secondary: income (higher better)
+					return finalBalance, totalIncome, true, true
 				default: // OptimizeTax
-					if totalWithdrawn > 0 {
-						return totalTax / totalWithdrawn, false
-					}
-					return 1.0, false
+					// Primary: tax efficiency (lower better), Secondary: income (higher better)
+					return taxEfficiency, totalIncome, false, true
 				}
+			}
+
+			// Check if two scores are "similar" (within 1%)
+			isSimilar := func(a, b float64) bool {
+				if a == 0 && b == 0 {
+					return true
+				}
+				if a == 0 || b == 0 {
+					return false
+				}
+				diff := (a - b) / a
+				if diff < 0 {
+					diff = -diff
+				}
+				return diff < 0.01 // Within 1%
 			}
 
 			// Run all strategies
 			var bestIdx int = -1
 			var bestScore float64 = -1
+			var bestSecondaryScore float64 = -1
 			var longestYear int = 0
 			var longestIdx int = 0
 
@@ -142,10 +163,28 @@ func RunSensitivityAnalysis(config *Config, goal OptimizationGoal) *SensitivityA
 
 				// First pass: Find best among strategies that don't run out
 				if !result.RanOutOfMoney {
-					score, higherIsBetter := calcScore(result.TotalTaxPaid, result.TotalWithdrawn, totalIncome, finalBal)
-					isBetter := bestScore < 0 || (higherIsBetter && score > bestScore) || (!higherIsBetter && score < bestScore)
+					score, secondary, higherIsBetter, higherSecondary := calcScores(result.TotalTaxPaid, result.TotalWithdrawn, totalIncome, finalBal)
+
+					// Determine if this is better
+					isBetter := false
+					if bestScore < 0 {
+						isBetter = true
+					} else if higherIsBetter && score > bestScore {
+						isBetter = true
+					} else if !higherIsBetter && score < bestScore {
+						isBetter = true
+					} else if isSimilar(score, bestScore) {
+						// Primary scores are similar, use secondary as tiebreaker
+						if higherSecondary && secondary > bestSecondaryScore {
+							isBetter = true
+						} else if !higherSecondary && secondary < bestSecondaryScore {
+							isBetter = true
+						}
+					}
+
 					if isBetter {
 						bestScore = score
+						bestSecondaryScore = secondary
 						bestIdx = i
 					}
 				}
@@ -154,6 +193,7 @@ func RunSensitivityAnalysis(config *Config, goal OptimizationGoal) *SensitivityA
 			// Second pass: If all ran out, prefer strategies with positive final balance
 			if bestIdx < 0 {
 				bestScore = -1
+				bestSecondaryScore = -1
 				for i, result := range simResults {
 					finalBal := 0.0
 					for _, bal := range result.FinalBalances {
@@ -165,10 +205,28 @@ func RunSensitivityAnalysis(config *Config, goal OptimizationGoal) *SensitivityA
 						for _, year := range result.Years {
 							totalIncome += year.NetIncomeReceived
 						}
-						score, higherIsBetter := calcScore(result.TotalTaxPaid, result.TotalWithdrawn, totalIncome, finalBal)
-						isBetter := bestScore < 0 || (higherIsBetter && score > bestScore) || (!higherIsBetter && score < bestScore)
+						score, secondary, higherIsBetter, higherSecondary := calcScores(result.TotalTaxPaid, result.TotalWithdrawn, totalIncome, finalBal)
+
+						// Determine if this is better
+						isBetter := false
+						if bestScore < 0 {
+							isBetter = true
+						} else if higherIsBetter && score > bestScore {
+							isBetter = true
+						} else if !higherIsBetter && score < bestScore {
+							isBetter = true
+						} else if isSimilar(score, bestScore) {
+							// Primary scores are similar, use secondary as tiebreaker
+							if higherSecondary && secondary > bestSecondaryScore {
+								isBetter = true
+							} else if !higherSecondary && secondary < bestSecondaryScore {
+								isBetter = true
+							}
+						}
+
 						if isBetter {
 							bestScore = score
+							bestSecondaryScore = secondary
 							bestIdx = i
 						}
 					}
