@@ -362,7 +362,7 @@ func balanceTaxableWithdrawals(
 				continue
 			}
 			available := state.AvailableCrystallised
-			if strategy == GradualCrystallisation {
+			if strategy == GradualCrystallisation || strategy == UFPLSStrategy {
 				available += state.AvailableUncryst
 			}
 			if available <= 0.01 {
@@ -403,7 +403,7 @@ func balanceTaxableWithdrawals(
 
 		// Cap at available
 		available := bestState.AvailableCrystallised
-		if strategy == GradualCrystallisation {
+		if strategy == GradualCrystallisation || strategy == UFPLSStrategy {
 			available += bestState.AvailableUncryst
 		}
 
@@ -451,12 +451,13 @@ func withdrawPensionForPerson(
 		}
 	}
 
-	// Second: crystallise more if gradual strategy and still need more
-	if strategy == GradualCrystallisation && state.AvailableUncryst > 0 && netReceived < netNeeded {
+	// Second: withdraw from uncrystallised pot if gradual or UFPLS strategy and still need more
+	if (strategy == GradualCrystallisation || strategy == UFPLSStrategy) && state.AvailableUncryst > 0 && netReceived < netNeeded {
 		stillNeeded := netNeeded - netReceived
 
-		// If PCLS already taken, all crystallisation is taxable
-		if state.PCLSTaken {
+		// If PCLS already taken and using GradualCrystallisation, all is taxable (no 25% tax-free)
+		// For UFPLS, always get 25% tax-free regardless of PCLSTaken
+		if state.PCLSTaken && strategy == GradualCrystallisation {
 			grossNeeded, _ := GrossUpForTax(stillNeeded, state.CurrentTaxableIncome, taxBands)
 			grossNeeded = math.Min(grossNeeded, state.AvailableUncryst)
 
@@ -470,8 +471,8 @@ func withdrawPensionForPerson(
 				netReceived += net
 			}
 		} else {
-			// When crystallising: 25% is tax-free, 75% is taxable
-			// Iteratively find the right amount to crystallise
+			// When crystallising/UFPLS: 25% is tax-free, 75% is taxable
+			// Iteratively find the right amount to withdraw
 			toCrystallise := stillNeeded * 1.3 // Initial estimate
 
 			for i := 0; i < 20; i++ {
@@ -597,7 +598,7 @@ func fillPersonalAllowancesSimple(
 		}
 
 		available := state.AvailableCrystallised
-		if strategy == GradualCrystallisation {
+		if strategy == GradualCrystallisation || strategy == UFPLSStrategy {
 			available += state.AvailableUncryst
 		}
 		if available <= 0 {
@@ -754,7 +755,7 @@ func balancedWithdrawals(
 				continue
 			}
 			available := state.AvailableCrystallised
-			if strategy == GradualCrystallisation {
+			if strategy == GradualCrystallisation || strategy == UFPLSStrategy {
 				available += state.AvailableUncryst
 			}
 			if available <= 0.01 {
@@ -767,10 +768,13 @@ func balancedWithdrawals(
 			nextThreshold := getNextBandThreshold(state.CurrentTaxableIncome, taxBands)
 			roomInBand := nextThreshold - state.CurrentTaxableIncome
 
-			// When crystallising, only 75% counts toward taxable income (unless PCLS taken)
-			// So we can crystallise more before hitting the next band
-			// If we have X room in band, we can crystallise X/0.75 (with 25% tax-free)
-			if strategy == GradualCrystallisation && state.AvailableUncryst > 0.01 && !state.PCLSTaken {
+			// When crystallising/UFPLS, only 75% counts toward taxable income
+			// So we can withdraw more before hitting the next band
+			// If we have X room in band, we can withdraw X/0.75 (with 25% tax-free)
+			// For GradualCrystallisation: only applies if PCLS not taken
+			// For UFPLS: always applies (each withdrawal is 25% tax-free)
+			if state.AvailableUncryst > 0.01 &&
+				(strategy == UFPLSStrategy || (strategy == GradualCrystallisation && !state.PCLSTaken)) {
 				roomInBand = roomInBand / 0.75
 			}
 
