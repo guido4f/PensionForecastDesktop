@@ -321,16 +321,28 @@ func GenerateSensitivityReport(analysis *SensitivityAnalysis) (string, error) {
 	}
 	defer f.Close()
 
-	// Strategy colors for the heatmap
+	// Strategy colors for the heatmap (matching ShortName() output)
 	strategyColors := map[string]string{
-		"ISA→Pen/Early": "#e3f2fd", // Light blue
-		"Pen→ISA/Early": "#e8f5e9", // Light green
-		"TaxOpt/Early":  "#fff3e0", // Light orange
-		"Pen+ISA/Early": "#f3e5f5", // Light purple
-		"ISA→Pen/2031":  "#bbdefb", // Blue
-		"Pen→ISA/2031":  "#c8e6c9", // Green
-		"TaxOpt/2031":   "#ffe0b2", // Orange
-		"Pen+ISA/2031":  "#e1bee7", // Purple
+		"ISAFirst/Early":  "#e3f2fd", // Light blue
+		"ISAFirst/Normal": "#bbdefb", // Blue
+		"ISAFirst/Ext+10": "#90caf9", // Darker blue
+		"ISAFirst/PCLS":   "#64b5f6", // Even darker blue
+		"PenFirst/Early":  "#fff3e0", // Light orange
+		"PenFirst/Normal": "#ffe0b2", // Orange
+		"PenFirst/Ext+10": "#ffcc80", // Darker orange
+		"PenFirst/PCLS":   "#ffb74d", // Even darker orange
+		"TaxOpt/Early":    "#fce4ec", // Light pink
+		"TaxOpt/Normal":   "#f8bbd9", // Pink
+		"TaxOpt/Ext+10":   "#f48fb1", // Darker pink
+		"TaxOpt/PCLS":     "#f06292", // Even darker pink
+		"Combined/Early":  "#e8f5e9", // Light green
+		"Combined/Normal": "#c8e6c9", // Green
+		"Combined/Ext+10": "#a5d6a7", // Darker green
+		"Combined/PCLS":   "#81c784", // Even darker green
+		"PenOnly/Early":   "#f3e5f5", // Light purple
+		"PenOnly/Normal":  "#e1bee7", // Purple
+		"PenOnly/Ext+10":  "#ce93d8", // Darker purple
+		"PenOnly/PCLS":    "#ba68c8", // Even darker purple
 	}
 
 	// Write HTML header

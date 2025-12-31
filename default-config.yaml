@@ -62,10 +62,10 @@
 # The simulator compares 8 combinations (4 strategies × 2 mortgage options):
 #
 # Drawdown Strategies:
-#   ISA-First (ISA→Pen): Withdraw from ISA/savings first, then pension
-#   Pension-First (Pen→ISA): Withdraw from pension first, then ISA
-#   Tax-Optimized (TaxOpt): Dynamically choose source to minimize tax
-#   Pension-to-ISA (Pen+ISA): Take pension and deposit excess to ISA
+#   ISAFirst: Withdraw from ISA/savings first, then pension
+#   PenFirst: Withdraw from pension first, then ISA
+#   TaxOpt: Dynamically choose source to minimize tax
+#   Combined: Take pension and deposit excess to ISA (fills ISA allowances)
 #
 # Mortgage Options:
 #   Early Payoff: Pay off mortgage as early as possible

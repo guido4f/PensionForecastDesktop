@@ -2473,16 +2473,28 @@ func GenerateDepletionSensitivityReport(analysis DepletionSensitivityAnalysis, c
 	}
 	fmt.Fprintf(f, "                        </tr>\n                    </thead>\n                    <tbody>\n")
 
-	// Strategy colors
+	// Strategy colors (matching ShortName() output)
 	strategyColors := map[string]string{
-		"ISA→Pen/Early":  "#3498db",
-		"ISA→Pen/2031":   "#2980b9",
-		"Pen→ISA/Early":  "#27ae60",
-		"Pen→ISA/2031":   "#1e8449",
-		"TaxOpt/Early":   "#e74c3c",
-		"TaxOpt/2031":    "#c0392b",
-		"Pen+ISA/Early":  "#9b59b6",
-		"Pen+ISA/2031":   "#8e44ad",
+		"ISAFirst/Early":  "#3498db",
+		"ISAFirst/Normal": "#2980b9",
+		"ISAFirst/Ext+10": "#2471a3",
+		"ISAFirst/PCLS":   "#1a5276",
+		"PenFirst/Early":  "#e74c3c",
+		"PenFirst/Normal": "#c0392b",
+		"PenFirst/Ext+10": "#a93226",
+		"PenFirst/PCLS":   "#922b21",
+		"TaxOpt/Early":    "#f39c12",
+		"TaxOpt/Normal":   "#d68910",
+		"TaxOpt/Ext+10":   "#b9770e",
+		"TaxOpt/PCLS":     "#9c640c",
+		"Combined/Early":  "#27ae60",
+		"Combined/Normal": "#1e8449",
+		"Combined/Ext+10": "#196f3d",
+		"Combined/PCLS":   "#145a32",
+		"PenOnly/Early":   "#9b59b6",
+		"PenOnly/Normal":  "#8e44ad",
+		"PenOnly/Ext+10":  "#7d3c98",
+		"PenOnly/PCLS":    "#6c3483",
 	}
 
 	for _, p := range pensionRates {

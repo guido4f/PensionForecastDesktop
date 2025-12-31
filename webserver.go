@@ -2941,7 +2941,7 @@ const webUIHTML = `<!DOCTYPE html>
                                 <input type="checkbox" id="maximize-couple-isa" checked>
                                 Maximize couple ISA transfers
                             </label>
-                            <div class="form-hint">Pen→ISA: fill both ISA allowances (£40k/yr)</div>
+                            <div class="form-hint">Combined: fill both ISA allowances (£40k/yr)</div>
                         </div>
                     </div>
                 </div>
@@ -3091,20 +3091,22 @@ const webUIHTML = `<!DOCTYPE html>
             if (!lastResults || !lastResults.results) return;
 
             // Find matching Early vs Normal vs Extended groups (same drawdown strategy)
-            const strategies = ['ISA→Pen', 'Pen→ISA', 'TaxOpt', 'Pen→ISA+'];
+            const strategies = ['ISAFirst', 'PenFirst', 'TaxOpt', 'Combined', 'PenOnly'];
             let html = '';
 
             strategies.forEach(base => {
                 const early = lastResults.results.find(r => r.short_name === base + '/Early');
                 const normal = lastResults.results.find(r => r.short_name === base + '/Normal');
-                const extended = lastResults.results.find(r => r.short_name === base + '/Extended');
-                if (!early && !normal && !extended) return;
+                const extended = lastResults.results.find(r => r.short_name === base + '/Ext+10');
+                const pcls = lastResults.results.find(r => r.short_name === base + '/PCLS');
+                if (!early && !normal && !extended && !pcls) return;
 
                 // Find best option for highlighting
                 const options = [
                     { name: 'Early', data: early },
                     { name: 'Normal', data: normal },
-                    { name: 'Extended', data: extended }
+                    { name: 'Ext+10', data: extended },
+                    { name: 'PCLS', data: pcls }
                 ].filter(o => o.data);
                 const lowestTax = options.reduce((min, o) => o.data.total_tax_paid < min.data.total_tax_paid ? o : min, options[0]);
                 const lowestMtg = options.reduce((min, o) => o.data.total_mortgage_paid < min.data.total_mortgage_paid ? o : min, options[0]);

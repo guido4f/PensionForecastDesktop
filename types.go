@@ -111,7 +111,7 @@ func (sp SimulationParams) ShortName() string {
 	} else if sp.DrawdownOrder == TaxOptimized {
 		orderShort = "TaxOpt"
 	} else if sp.DrawdownOrder == PensionToISA {
-		orderShort = "Pen→ISA"
+		orderShort = "Combined"
 	} else if sp.DrawdownOrder == PensionOnly {
 		orderShort = "PenOnly"
 	}
