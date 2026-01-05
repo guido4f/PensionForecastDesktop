@@ -279,12 +279,33 @@ func (r *PDFActionPlanReport) addTitlePage() {
 
 	// Display income tiers
 	incomeLines := r.getIncomeRequirementLines(startYear, endYear, refBirthYear)
-	for i, line := range incomeLines {
-		border := "LR"
-		if i == len(incomeLines)-1 {
-			border = "LRB"
-		}
-		r.pdf.CellFormat(contentWidth, 7, line, border, 1, "C", true, 0, "")
+	for _, line := range incomeLines {
+		r.pdf.CellFormat(contentWidth, 7, line, "LR", 1, "C", true, 0, "")
+	}
+	r.pdf.CellFormat(contentWidth, 1, "", "LRB", 1, "C", true, 0, "")
+
+	// Mortgage box (if applicable)
+	if r.config.HasMortgage() {
+		r.pdf.Ln(10)
+		r.pdf.SetFont("Arial", "B", 12)
+		r.pdf.SetTextColor(0, 51, 102)
+		r.pdf.CellFormat(contentWidth, 8, "Mortgage Payments", "1", 1, "C", true, 0, "")
+
+		r.pdf.SetFont("Arial", "", 11)
+		r.pdf.SetTextColor(50, 50, 50)
+
+		// Calculate mortgage details
+		monthlyMortgage := r.config.GetTotalAnnualPayment() / 12
+		mortgageEndYear := getMortgagePayoffYear(r.config, r.result.Params)
+
+		// Monthly payment line
+		r.pdf.CellFormat(contentWidth, 7,
+			fmt.Sprintf("%s/month mortgage payment", FormatMoneyPDF(monthlyMortgage)),
+			"LR", 1, "C", true, 0, "")
+
+		// Mortgage end information
+		mortgageEndText := fmt.Sprintf("Mortgage ends: %d (Age %d)", mortgageEndYear, mortgageEndYear-refBirthYear)
+		r.pdf.CellFormat(contentWidth, 7, mortgageEndText, "LRB", 1, "C", true, 0, "")
 	}
 
 	// Disclaimer
@@ -344,6 +365,18 @@ func (r *PDFActionPlanReport) addStrategyOverview() {
 		}
 		r.pdf.CellFormat(35, 5, label, "", 0, "L", false, 0, "")
 		r.pdf.CellFormat(contentWidth-35, 5, line, "", 1, "L", false, 0, "")
+	}
+
+	// Mortgage details (if applicable)
+	if r.config.HasMortgage() {
+		monthlyMortgage := r.config.GetTotalAnnualPayment() / 12
+		mortgageEndYear := getMortgagePayoffYear(r.config, r.result.Params)
+		mortgageEndAge := mortgageEndYear - refBirthYear
+
+		r.pdf.CellFormat(35, 5, "Mortgage:", "", 0, "L", false, 0, "")
+		r.pdf.CellFormat(contentWidth-35, 5,
+			fmt.Sprintf("%s/month until %d (Age %d)", FormatMoneyPDF(monthlyMortgage), mortgageEndYear, mortgageEndAge),
+			"", 1, "L", false, 0, "")
 	}
 
 	r.pdf.Ln(5)

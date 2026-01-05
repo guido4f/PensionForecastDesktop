@@ -207,6 +207,8 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 						baseIncome = 0
 					}
 				} else {
+					// Both fixed and percentage tiers: apply inflation to the amount
+					// For percentage: 3.5% of initial = £35k, then £35k inflates each year
 					baseIncome = annualIncome * inflationMultiplier
 				}
 			} else {
