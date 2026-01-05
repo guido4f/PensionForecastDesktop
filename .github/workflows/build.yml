@@ -44,15 +44,13 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -tags console -ldflags "-s -w" -o dist/linux/goPensionForecast-linux-amd64-web .
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/linux/goPensionForecast-linux-amd64-ui .
           cp scripts/linux/run.sh dist/linux/
-          cp scripts/README.txt dist/linux/
           chmod +x dist/linux/*.sh dist/linux/goPensionForecast-*
-          cd dist && zip -r goPensionForecast-linux-amd64.zip linux/
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-build
-          path: dist/goPensionForecast-linux-amd64.zip
+          path: dist/linux/
           retention-days: 7
 
   build-windows:
@@ -76,14 +74,12 @@ jobs:
           $env:CGO_ENABLED="1"
           go build -ldflags "-s -w" -o dist/windows/goPensionForecast-windows-amd64-ui.exe .
           Copy-Item scripts/windows/run.bat dist/windows/
-          Copy-Item scripts/README.txt dist/windows/
-          Compress-Archive -Path dist/windows/* -DestinationPath dist/goPensionForecast-windows-amd64.zip
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/goPensionForecast-windows-amd64.zip
+          path: dist/windows/
           retention-days: 7
 
   build-macos:
@@ -107,13 +103,39 @@ jobs:
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags console -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-amd64-web .
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-amd64-ui .
           cp scripts/macos/run.sh dist/macos/
-          cp scripts/README.txt dist/macos/
           chmod +x dist/macos/*.sh dist/macos/goPensionForecast-*
-          cd dist && zip -r goPensionForecast-macos.zip macos/
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: dist/goPensionForecast-macos.zip
+          path: dist/macos/
+          retention-days: 7
+
+  create-unified-artifact:
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create unified ZIP
+        run: |
+          mkdir -p release/all
+          cp -r artifacts/linux-build release/all/linux
+          cp -r artifacts/windows-build release/all/windows
+          cp -r artifacts/macos-build release/all/macos
+          cp scripts/README.txt release/all/
+          cd release && zip -r goPensionForecast.zip all/
+          ls -la
+
+      - name: Upload unified artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: goPensionForecast-all-platforms
+          path: release/goPensionForecast.zip
           retention-days: 7

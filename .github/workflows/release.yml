@@ -49,16 +49,13 @@ jobs:
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/linux/goPensionForecast-linux-amd64-ui .
           # Copy scripts
           cp scripts/linux/run.sh dist/linux/
-          cp scripts/README.txt dist/linux/
           chmod +x dist/linux/*.sh dist/linux/goPensionForecast-*
-          # Create ZIP
-          cd dist && zip -r goPensionForecast-linux-amd64.zip linux/
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: linux-release
-          path: dist/goPensionForecast-linux-amd64.zip
+          path: dist/linux/
           retention-days: 1
 
   build-windows:
@@ -86,15 +83,12 @@ jobs:
           go build -ldflags "-s -w" -o dist/windows/goPensionForecast-windows-amd64-ui.exe .
           # Copy scripts
           Copy-Item scripts/windows/run.bat dist/windows/
-          Copy-Item scripts/README.txt dist/windows/
-          # Create ZIP
-          Compress-Archive -Path dist/windows/* -DestinationPath dist/goPensionForecast-windows-amd64.zip
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-release
-          path: dist/goPensionForecast-windows-amd64.zip
+          path: dist/windows/
           retention-days: 1
 
   build-macos:
@@ -121,16 +115,13 @@ jobs:
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-amd64-ui .
           # Copy scripts
           cp scripts/macos/run.sh dist/macos/
-          cp scripts/README.txt dist/macos/
           chmod +x dist/macos/*.sh dist/macos/goPensionForecast-*
-          # Create ZIP (includes both architectures)
-          cd dist && zip -r goPensionForecast-macos.zip macos/
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: macos-release
-          path: dist/goPensionForecast-macos.zip
+          path: dist/macos/
           retention-days: 1
 
   create-release:
@@ -144,19 +135,23 @@ jobs:
         with:
           path: artifacts
 
-      - name: Prepare release files
+      - name: Create unified ZIP
         run: |
-          mkdir -p release
-          find artifacts -name "*.zip" -exec cp {} release/ \;
-          ls -la release/
+          mkdir -p release/all
+          # Copy platform directories
+          cp -r artifacts/linux-release release/all/linux
+          cp -r artifacts/windows-release release/all/windows
+          cp -r artifacts/macos-release release/all/macos
+          # Copy README to root
+          cp scripts/README.txt release/all/
+          # Create single unified ZIP
+          cd release && zip -r goPensionForecast.zip all/
+          ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            release/goPensionForecast-linux-amd64.zip
-            release/goPensionForecast-windows-amd64.zip
-            release/goPensionForecast-macos.zip
+          files: release/goPensionForecast.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
