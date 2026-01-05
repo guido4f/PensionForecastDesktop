@@ -11,13 +11,14 @@
 #
 # 1. FIXED INCOME MODE (default)
 #    ────────────────────────────
-#    You specify: How much monthly income you need
+#    You specify: How much monthly income you need (with multiple age-based tiers)
 #    Simulator shows: How long your funds will last, total tax paid
-#    Best for: "Can I afford £5,000/month in retirement?"
+#    Best for: "Can I afford £5,000/month until 67, then £3,000/month?"
 #
 #    Key settings:
-#      income_requirements.monthly_before_age: Income needed before age threshold
-#      income_requirements.monthly_after_age: Income needed after age threshold
+#      income_requirements.tiers: Multiple income phases by age range
+#        - Fixed amounts: monthly_amount: 5000 (£/month)
+#        - Percentages: monthly_amount: 5, is_percentage: true (5% annual rate)
 #
 #    Run with: ./goPensionForecast or ./goPensionForecast -html
 #
@@ -29,13 +30,15 @@
 #
 #    Key settings:
 #      income_requirements.target_depletion_age: Age when funds should reach zero
-#      income_requirements.income_ratio_phase1: Income ratio before threshold (e.g., 5)
-#      income_requirements.income_ratio_phase2: Income ratio after threshold (e.g., 3)
+#      income_requirements.tiers: Multiple ratio-based phases by age range
+#        - Each tier has a 'ratio' that controls relative income in that phase
+#        - A tier with ratio: 5 gets 5× the base multiplier
+#        - The simulator finds the multiplier that depletes funds at target age
 #
-#    The ratio controls relative income in each phase. A 5:3 ratio means:
-#    - Phase 1 income (before age threshold) = multiplier × 5
-#    - Phase 2 income (after age threshold) = multiplier × 3
-#    The simulator finds the optimal multiplier that depletes funds at target age.
+#    Example with ratios 5, 3, 2 across three tiers:
+#    - Phase 1: multiplier × 5 (highest spending early)
+#    - Phase 2: multiplier × 3 (medium spending)
+#    - Phase 3: multiplier × 2 (lowest spending late)
 #
 #    Run with: ./goPensionForecast -depletion or ./goPensionForecast -depletion -html
 #
@@ -128,19 +131,62 @@ financial:
 # ─────────────────────────────────────────────────────────────────────────────
 # INCOME REQUIREMENTS - What you need to withdraw
 # ─────────────────────────────────────────────────────────────────────────────
+# TIERED INCOME: Define multiple income phases based on age ranges.
+# Each tier can specify either:
+#   - Fixed monthly amount (£): monthly_amount: 5000
+#   - Percentage of initial portfolio: monthly_amount: 6, is_percentage: true
+#     (6% means 6% annual withdrawal rate = £60k/year on £1M = £5k/month)
+#
+# Age ranges use start_age and end_age. Omit for open-ended:
+#   - end_age: 64          → from retirement until age 64
+#   - start_age: 64, end_age: 70  → from age 64 to 70
+#   - start_age: 70        → from age 70 onwards
+#
 income_requirements:
-  # ═══ FIXED INCOME MODE SETTINGS ═══
-  monthly_before_age: 4000.00      # Monthly income before age threshold (£)
-  monthly_after_age: 2500.00       # Monthly income at/after age threshold (£)
+  # ═══ TIERED INCOME (recommended) ═══
+  # Example 1: Fixed amounts with multiple tiers
+  tiers:
+    - end_age: 67
+      monthly_amount: 4000.00      # £4,000/month until age 67
+    - start_age: 67
+      end_age: 75
+      monthly_amount: 3000.00      # £3,000/month from 67-75
+    - start_age: 75
+      monthly_amount: 2500.00      # £2,500/month from 75 onwards
+
+  # Example 2: Percentage-based withdrawal rates (uncomment to use)
+  # tiers:
+  #   - end_age: 65
+  #     monthly_amount: 5           # 5% annual withdrawal rate
+  #     is_percentage: true
+  #   - start_age: 65
+  #     end_age: 75
+  #     monthly_amount: 4.5         # 4.5% annual rate
+  #     is_percentage: true
+  #   - start_age: 75
+  #     monthly_amount: 4           # 4% annual rate from 75+
+  #     is_percentage: true
 
   # ═══ DEPLETION MODE SETTINGS ═══
   target_depletion_age: 80         # Age to deplete funds by (use with -depletion)
-  income_ratio_phase1: 5.0         # Income ratio before threshold (e.g., 5 in 5:3)
-  income_ratio_phase2: 3.0         # Income ratio after threshold (e.g., 3 in 5:3)
+  # For depletion mode, tiers use 'ratio' instead of 'monthly_amount':
+  # tiers:
+  #   - end_age: 65
+  #     ratio: 5.0                  # Higher spending ratio before 65
+  #   - start_age: 65
+  #     end_age: 75
+  #     ratio: 3.0                  # Medium spending 65-75
+  #   - start_age: 75
+  #     ratio: 2.0                  # Lower spending from 75+
 
-  # ═══ COMMON SETTINGS ═══
-  age_threshold: 67                # Age when income requirement changes
-  reference_person: "Person1"      # Whose age determines the threshold
+  # ═══ LEGACY SETTINGS (used if tiers is empty) ═══
+  # monthly_before_age: 4000.00    # Monthly income before age threshold (£)
+  # monthly_after_age: 2500.00     # Monthly income at/after age threshold (£)
+  # income_ratio_phase1: 5.0       # Depletion mode ratio before threshold
+  # income_ratio_phase2: 3.0       # Depletion mode ratio after threshold
+  # age_threshold: 67              # Age when income requirement changes
+
+  reference_person: "Person1"      # Whose age determines the tier transitions
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MORTGAGE - Outstanding mortgage details

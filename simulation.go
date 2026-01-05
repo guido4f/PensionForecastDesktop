@@ -86,7 +86,13 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		FinalBalances: make(map[string]PersonBalances),
 	}
 
-	// Base income requirements (annual)
+	// Calculate initial portfolio value (used for percentage-based income tiers)
+	initialPortfolio := 0.0
+	for _, p := range people {
+		initialPortfolio += p.TotalWealth()
+	}
+
+	// Legacy: Base income requirements (annual) - only used if no tiers configured
 	baseIncomeBeforeAge := config.IncomeRequirements.MonthlyBeforeAge * 12
 	baseIncomeAfterAge := config.IncomeRequirements.MonthlyAfterAge * 12
 	ageThreshold := config.IncomeRequirements.AgeThreshold
@@ -172,10 +178,44 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		var baseIncome float64
 		// Only require income once retired
 		if refAge >= refPerson.RetirementAge {
-			if refAge < ageThreshold {
-				baseIncome = baseIncomeBeforeAge * inflationMultiplier
+			if config.IncomeRequirements.HasTiers() {
+				// Use tiered income system
+				annualIncome := config.IncomeRequirements.GetAnnualIncomeForAge(refAge, initialPortfolio, 1.0)
+
+				// Check if this is an investment gains tier (returns -12 from GetAnnualIncomeForAge)
+				if annualIncome < 0 {
+					// Investment gains income: real returns (growth minus inflation)
+					// Calculate total pension and ISA values
+					totalPension := 0.0
+					totalISA := 0.0
+					for _, p := range people {
+						totalPension += p.CrystallisedPot + p.UncrystallisedPot
+						totalISA += p.TaxFreeSavings
+					}
+
+					// Calculate nominal gains
+					pensionGains := totalPension * pensionRate
+					isaGains := totalISA * savingsRate
+					totalGains := pensionGains + isaGains
+
+					// Subtract inflation (real returns)
+					inflationLoss := currentPortfolio * config.Financial.IncomeInflationRate
+					baseIncome = totalGains - inflationLoss
+
+					// Ensure non-negative (can't have negative income requirement)
+					if baseIncome < 0 {
+						baseIncome = 0
+					}
+				} else {
+					baseIncome = annualIncome * inflationMultiplier
+				}
 			} else {
-				baseIncome = baseIncomeAfterAge * inflationMultiplier
+				// Legacy before/after threshold system
+				if refAge < ageThreshold {
+					baseIncome = baseIncomeBeforeAge * inflationMultiplier
+				} else {
+					baseIncome = baseIncomeAfterAge * inflationMultiplier
+				}
 			}
 		}
 		state.RequiredIncome = baseIncome
@@ -218,9 +258,14 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 				emergencyFundPerPerson = baseEmergencyFund / float64(len(people))
 			} else {
 				// Use base income without inflation adjustment
-				baseMonthly := config.IncomeRequirements.MonthlyBeforeAge
-				if refAge >= ageThreshold {
-					baseMonthly = config.IncomeRequirements.MonthlyAfterAge
+				var baseMonthly float64
+				if config.IncomeRequirements.HasTiers() {
+					baseMonthly = config.IncomeRequirements.GetMonthlyIncomeForAge(refAge, initialPortfolio, 1.0)
+				} else {
+					baseMonthly = config.IncomeRequirements.MonthlyBeforeAge
+					if refAge >= ageThreshold {
+						baseMonthly = config.IncomeRequirements.MonthlyAfterAge
+					}
 				}
 				emergencyFundPerPerson = (baseMonthly * float64(config.Financial.EmergencyFundMonths)) / float64(len(people))
 			}

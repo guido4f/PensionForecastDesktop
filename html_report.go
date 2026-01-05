@@ -4,8 +4,64 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
+
+// getIncomeRequirementsHTML returns HTML rows for displaying income requirements (tiered or legacy)
+func getIncomeRequirementsHTML(config *Config) string {
+	if config.IncomeRequirements.HasTiers() {
+		// Calculate initial portfolio for percentage display
+		initialPortfolio := 0.0
+		for _, p := range config.People {
+			initialPortfolio += p.Pension + p.TaxFreeSavings
+		}
+
+		var html string
+		for i, tier := range config.IncomeRequirements.Tiers {
+			// Build age range description
+			var ageRange string
+			if tier.StartAge == nil && tier.EndAge != nil {
+				ageRange = "until " + strconv.Itoa(*tier.EndAge)
+			} else if tier.StartAge != nil && tier.EndAge == nil {
+				ageRange = strconv.Itoa(*tier.StartAge) + "+"
+			} else if tier.StartAge != nil && tier.EndAge != nil {
+				ageRange = strconv.Itoa(*tier.StartAge) + "-" + strconv.Itoa(*tier.EndAge)
+			} else {
+				ageRange = "all ages"
+			}
+
+			// Build amount description
+			var amount string
+			if tier.IsInvestmentGains {
+				amount = "Real Returns (growth - inflation)"
+			} else if tier.IsPercentage {
+				monthly := initialPortfolio * (tier.MonthlyAmount / 100.0) / 12.0
+				amount = fmt.Sprintf("%.1f%% (%s/mo)", tier.MonthlyAmount, FormatMoney(monthly))
+			} else if tier.Ratio > 0 {
+				amount = fmt.Sprintf("%.1fx", tier.Ratio)
+			} else {
+				amount = FormatMoney(tier.MonthlyAmount) + "/mo"
+			}
+
+			// First tier gets "Income Tiers" label
+			label := ""
+			if i == 0 {
+				label = "Income Tiers"
+			}
+			html += fmt.Sprintf("<tr><td>%s</td><td>%s: %s [after tax]</td></tr>\n", label, ageRange, amount)
+		}
+		return html
+	}
+
+	// Legacy mode: before/after age threshold
+	return fmt.Sprintf(`<tr><td>Monthly Income (before %d)</td><td>%s [after tax]</td></tr>
+                        <tr><td>Monthly Income (after %d)</td><td>%s [after tax]</td></tr>`,
+		config.IncomeRequirements.AgeThreshold,
+		FormatMoney(config.IncomeRequirements.MonthlyBeforeAge),
+		config.IncomeRequirements.AgeThreshold,
+		FormatMoney(config.IncomeRequirements.MonthlyAfterAge))
+}
 
 // getGrowthDeclineHTML returns HTML for displaying growth decline info, or empty string if not enabled
 func getGrowthDeclineHTML(config *Config) string {
@@ -345,8 +401,7 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
                         <tr><td>Pension Growth Rate</td><td>%.0f%%</td></tr>
                         <tr><td>Savings Growth Rate</td><td>%.0f%%</td></tr>
                         <tr><td>Income Inflation</td><td>%.0f%%</td></tr>
-                        <tr><td>Monthly Income (before %d)</td><td>%s [after tax]</td></tr>
-                        <tr><td>Monthly Income (after %d)</td><td>%s [after tax]</td></tr>
+                        %s
                         <tr><td>Mortgage (until %d)</td><td>%s/year</td></tr>
                         <tr><td>Simulation Period</td><td>%d to age %d</td></tr>
                         %s
@@ -355,10 +410,7 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
             </div>
         </div>
 `, config.Financial.PensionGrowthRate*100, config.Financial.SavingsGrowthRate*100, config.Financial.IncomeInflationRate*100,
-		config.IncomeRequirements.AgeThreshold,
-		FormatMoney(config.IncomeRequirements.MonthlyBeforeAge),
-		config.IncomeRequirements.AgeThreshold,
-		FormatMoney(config.IncomeRequirements.MonthlyAfterAge),
+		getIncomeRequirementsHTML(config),
 		config.Mortgage.EndYear, FormatMoney(config.GetTotalAnnualPayment()),
 		config.Simulation.StartYear, config.Simulation.EndAge,
 		getGrowthDeclineHTML(config))
@@ -903,8 +955,7 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
                             <tr><td>Pension Growth Rate</td><td>%.0f%%</td></tr>
                             <tr><td>Savings Growth Rate</td><td>%.0f%%</td></tr>
                             <tr><td>Income Inflation</td><td>%.0f%%</td></tr>
-                            <tr><td>Income (before %d)</td><td>%s/month [after tax]</td></tr>
-                            <tr><td>Income (after %d)</td><td>%s/month [after tax]</td></tr>
+                            %s
                             <tr><td>Mortgage</td><td>%s/year until %d</td></tr>
                             %s
                         </table>
@@ -912,10 +963,7 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
                 </div>
             </div>
 `, config.Financial.PensionGrowthRate*100, config.Financial.SavingsGrowthRate*100, config.Financial.IncomeInflationRate*100,
-		config.IncomeRequirements.AgeThreshold,
-		FormatMoney(config.IncomeRequirements.MonthlyBeforeAge),
-		config.IncomeRequirements.AgeThreshold,
-		FormatMoney(config.IncomeRequirements.MonthlyAfterAge),
+		getIncomeRequirementsHTML(config),
 		FormatMoney(config.GetTotalAnnualPayment()), config.Mortgage.EndYear,
 		getGrowthDeclineHTML(config))
 

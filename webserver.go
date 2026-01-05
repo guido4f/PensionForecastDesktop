@@ -132,6 +132,7 @@ func (ws *WebServer) Start() error {
 
 	// Static/UI routes
 	mux.HandleFunc("/", ws.handleIndex)
+	mux.HandleFunc("/glossary", ws.handleGlossary)
 	mux.HandleFunc("/api/config", ws.handleGetConfig)
 	mux.HandleFunc("/api/simulate", ws.handleSimulate)
 	mux.HandleFunc("/api/simulate/fixed", ws.handleSimulateFixed)
@@ -177,6 +178,7 @@ func (ws *WebServer) StartForEmbedded() (url string, cleanup func(), err error) 
 
 	// Static/UI routes
 	mux.HandleFunc("/", ws.handleIndex)
+	mux.HandleFunc("/glossary", ws.handleGlossary)
 	mux.HandleFunc("/api/config", ws.handleGetConfig)
 	mux.HandleFunc("/api/simulate", ws.handleSimulate)
 	mux.HandleFunc("/api/simulate/fixed", ws.handleSimulateFixed)
@@ -237,6 +239,460 @@ func (ws *WebServer) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, webUIHTML)
 }
+
+// handleGlossary serves the glossary/help page
+func (ws *WebServer) handleGlossary(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, glossaryHTML)
+}
+
+// glossaryHTML contains the glossary page content
+const glossaryHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Glossary - Pension Forecast Simulator</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --success: #16a34a;
+            --warning: #ea580c;
+            --danger: #dc2626;
+            --bg: #f1f5f9;
+            --card-bg: #ffffff;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #0f172a;
+                --card-bg: #1e293b;
+                --text: #f1f5f9;
+                --text-muted: #94a3b8;
+                --border: #334155;
+            }
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            padding: 1rem;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        h1 { font-size: 1.5rem; }
+        .back-link {
+            color: var(--primary);
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+        .back-link:hover { text-decoration: underline; }
+        .toc {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .toc h2 { font-size: 1rem; margin-bottom: 0.5rem; }
+        .toc ul { list-style: none; columns: 2; }
+        .toc a { color: var(--primary); text-decoration: none; font-size: 0.85rem; }
+        .toc a:hover { text-decoration: underline; }
+        section {
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        section h2 {
+            font-size: 1.1rem;
+            color: var(--primary);
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+        section h3 {
+            font-size: 0.95rem;
+            margin: 1rem 0 0.5rem 0;
+            color: var(--text);
+        }
+        p, li { font-size: 0.875rem; margin-bottom: 0.5rem; }
+        ul { margin-left: 1.25rem; }
+        .formula {
+            background: var(--bg);
+            padding: 0.75rem 1rem;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 0.8rem;
+            margin: 0.5rem 0;
+            overflow-x: auto;
+        }
+        .example {
+            background: var(--bg);
+            padding: 0.75rem 1rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin: 0.5rem 0;
+            border-left: 3px solid var(--primary);
+        }
+        .warning {
+            background: #fef3c7;
+            color: #92400e;
+            padding: 0.75rem 1rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            margin: 0.5rem 0;
+        }
+        @media (prefers-color-scheme: dark) {
+            .warning { background: #78350f; color: #fef3c7; }
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            margin: 0.5rem 0;
+        }
+        th, td {
+            padding: 0.5rem;
+            text-align: left;
+            border: 1px solid var(--border);
+        }
+        th { background: var(--bg); font-weight: 600; }
+        code {
+            background: var(--bg);
+            padding: 0.1rem 0.3rem;
+            border-radius: 3px;
+            font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Glossary & Help</h1>
+            <a href="/" class="back-link">← Back to Simulator</a>
+        </header>
+
+        <nav class="toc">
+            <h2>Contents</h2>
+            <ul>
+                <li><a href="#modes">Simulation Modes</a></li>
+                <li><a href="#strategies">Drawdown Strategies</a></li>
+                <li><a href="#crystallisation">Crystallisation Methods</a></li>
+                <li><a href="#income-types">Income Types</a></li>
+                <li><a href="#income-strategies">Income Strategies</a></li>
+                <li><a href="#tax">Tax Calculations</a></li>
+                <li><a href="#pensions">Pension Types</a></li>
+                <li><a href="#mortgage">Mortgage Options</a></li>
+                <li><a href="#growth">Growth & Inflation</a></li>
+                <li><a href="#results">Understanding Results</a></li>
+            </ul>
+        </nav>
+
+        <section id="modes">
+            <h2>Simulation Modes</h2>
+
+            <h3>Fixed Income Mode</h3>
+            <p>You specify how much monthly income you need. The simulator shows how long your funds will last and compares different strategies.</p>
+            <div class="example">
+                <strong>Use case:</strong> "I need £4,000/month. How long will my pension last?"
+            </div>
+
+            <h3>Depletion Mode</h3>
+            <p>You specify a target age to deplete funds. The simulator calculates the maximum sustainable income using binary search.</p>
+            <div class="example">
+                <strong>Use case:</strong> "I want my money to last until age 90. How much can I spend?"
+            </div>
+
+            <h3>Pension-Only Mode</h3>
+            <p>Depletes pension pots while preserving ISA balances. Useful for inheritance planning where ISAs pass tax-free.</p>
+
+            <h3>Pension-to-ISA Mode</h3>
+            <p>Strategically over-draws from pensions to fill unused tax bands, then deposits excess into ISAs. Maximises tax-free wealth transfer.</p>
+        </section>
+
+        <section id="strategies">
+            <h2>Drawdown Strategies</h2>
+
+            <h3>Savings First (ISA First)</h3>
+            <p>Withdraw from ISA before touching pension. Allows pension to grow tax-deferred longer.</p>
+            <ul>
+                <li>Pro: Pension continues growing tax-free</li>
+                <li>Con: May push you into higher tax bands later when pension is accessed</li>
+            </ul>
+
+            <h3>Pension First</h3>
+            <p>Withdraw from pension before ISA. Uses up pension while ISA grows tax-free.</p>
+            <ul>
+                <li>Pro: Reduces pension pot exposed to inheritance tax</li>
+                <li>Con: May trigger higher tax rates early</li>
+            </ul>
+
+            <h3>Tax Optimised</h3>
+            <p>Balances withdrawals to minimise tax each year. Fills personal allowance and basic rate band optimally.</p>
+            <div class="formula">
+If pension income < Personal Allowance → Take from pension (tax-free)
+Else if pension fills basic rate → Take remainder from ISA (tax-free)
+</div>
+
+            <h3>Pension-to-ISA (Bed & ISA)</h3>
+            <p>Over-withdraws from pension to fill tax bands, deposits excess into ISA. Gradually moves wealth from taxable pension to tax-free ISA.</p>
+            <div class="example">
+                <strong>Example:</strong> If you need £20k but have £30k of basic rate band available, withdraw £30k from pension (pay 20% on £17.5k) and deposit £10k to ISA.
+            </div>
+
+            <h3>Fill Basic Rate</h3>
+            <p>Always withdraws enough from pension to fill the entire basic rate band (£50,270), regardless of income needs. Excess goes to ISA.</p>
+
+            <h3>State Pension Bridge</h3>
+            <p>Before state pension age, withdraws extra from pension to "bridge" the income gap. Reduces reliance on DC pension once state pension begins.</p>
+        </section>
+
+        <section id="crystallisation">
+            <h2>Crystallisation Methods</h2>
+
+            <h3>What is Crystallisation?</h3>
+            <p>When you access your pension, you "crystallise" it - converting uncrystallised funds into accessible money. 25% can be taken tax-free (Pension Commencement Lump Sum or PCLS).</p>
+
+            <h3>Gradual Crystallisation</h3>
+            <p>Crystallise only what you need each year. Each withdrawal is 25% tax-free, 75% taxable.</p>
+            <div class="formula">
+Withdrawal of £10,000:
+  Tax-free portion: £2,500 (to ISA)
+  Taxable portion:  £7,500 (to crystallised pot)
+</div>
+
+            <h3>UFPLS (Uncrystallised Funds Pension Lump Sum)</h3>
+            <p>Take lump sums directly from uncrystallised pot. Preserves the 25% tax-free entitlement on remaining funds.</p>
+            <ul>
+                <li>Each UFPLS is 25% tax-free, 75% taxable</li>
+                <li>Remaining pot keeps its 25% tax-free entitlement</li>
+                <li>More flexible than full crystallisation</li>
+            </ul>
+
+            <h3>PCLS (Pension Commencement Lump Sum)</h3>
+            <p>Take entire 25% tax-free lump sum upfront. Remaining 75% goes into drawdown (fully taxable).</p>
+        </section>
+
+        <section id="income-types">
+            <h2>Income Types</h2>
+
+            <h3>Fixed Amount (£/month)</h3>
+            <p>A specific monthly income in today's money, adjusted for inflation each year.</p>
+            <div class="formula">
+Year N income = Base amount × (1 + inflation_rate)^N
+</div>
+
+            <h3>Percentage of Portfolio</h3>
+            <p>Annual percentage of your initial total portfolio value.</p>
+            <div class="formula">
+Annual income = Initial portfolio × (percentage / 100)
+Monthly income = Annual income / 12
+</div>
+            <div class="example">
+                <strong>Example:</strong> 4% of £1M portfolio = £40,000/year = £3,333/month
+            </div>
+
+            <h3>Real Returns (Investment Gains)</h3>
+            <p>Withdraw only the real (inflation-adjusted) investment gains each year. Preserves capital in real terms.</p>
+            <div class="formula">
+Income = (Pension × pension_growth) + (ISA × savings_growth) - (Total × inflation)
+</div>
+            <div class="example">
+                <strong>Example:</strong> £500k pension at 6% + £200k ISA at 5% - 3% inflation on £700k<br>
+                = £30,000 + £10,000 - £21,000 = £19,000/year
+            </div>
+            <div class="warning">
+                <strong>Note:</strong> Real returns income varies with portfolio size and market performance. May be zero or low in poor market years.
+            </div>
+        </section>
+
+        <section id="income-strategies">
+            <h2>Income Strategies</h2>
+
+            <h3>Guardrails (Guyton-Klinger)</h3>
+            <p>Dynamic withdrawal adjustments based on portfolio performance. If portfolio grows faster than expected, you can spend more. If it drops, you reduce spending.</p>
+            <table>
+                <tr><th>Parameter</th><th>Description</th><th>Example</th></tr>
+                <tr><td>Upper Limit</td><td>If withdrawal rate falls below this, increase spending</td><td>120% (rate dropped = portfolio grew)</td></tr>
+                <tr><td>Lower Limit</td><td>If withdrawal rate rises above this, decrease spending</td><td>80% (rate rose = portfolio fell)</td></tr>
+                <tr><td>Adjustment</td><td>How much to adjust by</td><td>10%</td></tr>
+            </table>
+
+            <h3>VPW (Variable Percentage Withdrawal)</h3>
+            <p>Withdrawal rate increases with age. Based on actuarial tables - withdraw more as life expectancy decreases.</p>
+            <table>
+                <tr><th>Age</th><th>VPW Rate</th><th>On £500k</th></tr>
+                <tr><td>55</td><td>3.0%</td><td>£15,000</td></tr>
+                <tr><td>65</td><td>4.0%</td><td>£20,000</td></tr>
+                <tr><td>75</td><td>5.5%</td><td>£27,500</td></tr>
+                <tr><td>85</td><td>8.0%</td><td>£40,000</td></tr>
+                <tr><td>95</td><td>15.0%</td><td>£75,000</td></tr>
+            </table>
+
+            <h3>Emergency Fund</h3>
+            <p>Maintains a minimum ISA balance as a cash buffer. Simulator won't withdraw below this threshold.</p>
+            <div class="formula">
+Emergency fund = Monthly expenses × Number of months
+</div>
+        </section>
+
+        <section id="tax">
+            <h2>Tax Calculations</h2>
+
+            <h3>Personal Allowance</h3>
+            <p>First £12,570 of income is tax-free. Tapers by £1 for every £2 earned over £100,000 (fully lost at £125,140).</p>
+            <div class="formula">
+Effective allowance = max(0, £12,570 - (income - £100,000) / 2)
+</div>
+
+            <h3>Tax Bands (2024/25)</h3>
+            <table>
+                <tr><th>Band</th><th>Range</th><th>Rate</th></tr>
+                <tr><td>Personal Allowance</td><td>£0 - £12,570</td><td>0%</td></tr>
+                <tr><td>Basic Rate</td><td>£12,571 - £50,270</td><td>20%</td></tr>
+                <tr><td>Higher Rate</td><td>£50,271 - £125,140</td><td>40%</td></tr>
+                <tr><td>Additional Rate</td><td>Over £125,140</td><td>45%</td></tr>
+            </table>
+
+            <h3>Tax-Free Income Sources</h3>
+            <ul>
+                <li>ISA withdrawals - always tax-free</li>
+                <li>25% PCLS/tax-free portion of pension - tax-free</li>
+                <li>Income within Personal Allowance - tax-free</li>
+            </ul>
+
+            <h3>Taxable Income Sources</h3>
+            <ul>
+                <li>State Pension - fully taxable (but uses allowance first)</li>
+                <li>DB Pension - fully taxable</li>
+                <li>Crystallised pension withdrawals - fully taxable</li>
+                <li>75% of UFPLS withdrawals - taxable</li>
+            </ul>
+        </section>
+
+        <section id="pensions">
+            <h2>Pension Types</h2>
+
+            <h3>DC (Defined Contribution) Pension</h3>
+            <p>A pot of money you've saved. Value depends on contributions and investment growth. This is what the simulator primarily models.</p>
+            <ul>
+                <li>You control when and how to access it</li>
+                <li>25% tax-free, 75% taxable</li>
+                <li>Can be inherited (tax-free if you die before 75)</li>
+            </ul>
+
+            <h3>DB (Defined Benefit) Pension</h3>
+            <p>A guaranteed annual income for life, based on salary and service. Also called "final salary" pension.</p>
+            <ul>
+                <li><strong>Normal Age:</strong> Age when full pension is payable</li>
+                <li><strong>Early Retirement:</strong> Reduced by X% per year early (e.g., 4%/year)</li>
+                <li><strong>Late Retirement:</strong> Increased by X% per year late (e.g., 5%/year)</li>
+                <li><strong>Commutation:</strong> Trade pension income for lump sum (e.g., £12 per £1 of pension)</li>
+            </ul>
+
+            <h3>State Pension</h3>
+            <p>Government pension payable from State Pension Age (currently 66, rising to 67).</p>
+            <ul>
+                <li><strong>Full amount (2024/25):</strong> £11,502/year</li>
+                <li><strong>Deferral:</strong> Increase of 5.8% for each year deferred</li>
+                <li>Fully taxable but typically covered by Personal Allowance</li>
+            </ul>
+        </section>
+
+        <section id="mortgage">
+            <h2>Mortgage Options</h2>
+
+            <h3>Normal Payoff</h3>
+            <p>Continue paying mortgage as scheduled until the end of the term.</p>
+
+            <h3>Early Payoff</h3>
+            <p>Pay off mortgage early using available funds. Specify the target year for payoff.</p>
+
+            <h3>Extended Term</h3>
+            <p>Assume mortgage continues beyond normal term (e.g., remortgaging). Useful for modelling interest-only scenarios.</p>
+
+            <h3>PCLS Payoff</h3>
+            <p>Use tax-free pension lump sum to pay off mortgage at retirement. Common strategy to become mortgage-free at retirement.</p>
+
+            <h3>Multiple Mortgage Parts</h3>
+            <p>Model complex mortgages with multiple parts (e.g., fixed + tracker, or multiple properties). Each part has its own principal, rate, start year, and term.</p>
+        </section>
+
+        <section id="growth">
+            <h2>Growth & Inflation</h2>
+
+            <h3>Pension Growth Rate</h3>
+            <p>Expected annual return on pension investments. Typical range: 4-7% for balanced funds.</p>
+
+            <h3>Savings Growth Rate</h3>
+            <p>Expected annual return on ISA investments. Often similar to pension growth, but may differ based on risk profile.</p>
+
+            <h3>Income Inflation Rate</h3>
+            <p>Rate at which your required income increases each year. Typically 2-3% to maintain purchasing power.</p>
+
+            <h3>State Pension Inflation</h3>
+            <p>Rate at which state pension increases. The "triple lock" guarantees the higher of: 2.5%, CPI inflation, or average earnings growth.</p>
+
+            <h3>Tax Band Inflation</h3>
+            <p>Rate at which tax bands increase. If 0%, you experience "fiscal drag" as more income falls into higher bands over time.</p>
+
+            <h3>Growth Rate Decline</h3>
+            <p>Option to gradually reduce growth rates over time (e.g., from 7% at 55 to 4% at 80) to model a shift to more conservative investments in later retirement.</p>
+            <div class="formula">
+Rate at age = Start rate - (Start rate - End rate) × (age - start_age) / (target_age - start_age)
+</div>
+        </section>
+
+        <section id="results">
+            <h2>Understanding Results</h2>
+
+            <h3>Strategy Comparison Table</h3>
+            <ul>
+                <li><strong>Strategy:</strong> Combination of crystallisation method and drawdown order</li>
+                <li><strong>Monthly Income:</strong> Sustainable income (in depletion mode) or configured income (fixed mode)</li>
+                <li><strong>Years Funded:</strong> How long funds last (fixed mode only)</li>
+                <li><strong>Final Balance:</strong> Remaining wealth at end of simulation</li>
+                <li><strong>Total Tax:</strong> Lifetime tax paid during retirement</li>
+            </ul>
+
+            <h3>Year-by-Year Breakdown</h3>
+            <ul>
+                <li><strong>Required Income:</strong> Gross income needed (before pensions)</li>
+                <li><strong>Net Required:</strong> Amount to withdraw after state/DB pensions</li>
+                <li><strong>ISA/Pension columns:</strong> Sources of withdrawals</li>
+                <li><strong>Tax:</strong> Income tax paid that year</li>
+                <li><strong>End Balance:</strong> Total wealth at year end</li>
+            </ul>
+
+            <h3>Depletion Year</h3>
+            <p>The year when funds run out. In depletion mode, this matches your target age. In fixed mode, this shows how long your specified income is sustainable.</p>
+
+            <h3>Sensitivity Analysis</h3>
+            <p>Grid showing how results change across different growth rate combinations. Helps understand risk - what if returns are lower than expected?</p>
+        </section>
+
+        <footer style="text-align: center; padding: 2rem 0; color: var(--text-muted); font-size: 0.8rem;">
+            <a href="/" class="back-link">← Back to Simulator</a>
+        </footer>
+    </div>
+</body>
+</html>
+`
 
 // handleGetConfig returns the current configuration
 func (ws *WebServer) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -2370,7 +2826,7 @@ const webUIHTML = `<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <h1>Pension Forecast Simulator <button onclick="showHelp()" style="background:none;border:none;color:white;font-size:1rem;cursor:pointer;opacity:0.8;" title="Help">?</button></h1>
+        <h1>Pension Forecast Simulator <a href="/glossary" target="_blank" style="color:white;font-size:0.8rem;margin-left:0.5rem;opacity:0.8;text-decoration:none;" title="Glossary & Help">Glossary</a></h1>
         <p>Tax-optimised retirement drawdown planning with advanced strategies</p>
     </div>
 
@@ -2688,20 +3144,64 @@ const webUIHTML = `<!DOCTYPE html>
                 <div class="card">
                     <h2 class="collapsible">Income Requirements</h2>
                     <div class="collapse-content">
+                        <!-- Income Tiers (Fixed Income Mode) -->
                         <div id="fixed-income-fields">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Monthly Before</label>
-                                    <input type="text" id="income-before" value="4000">
-                                    <div class="form-hint">Before age threshold</div>
+                            <div class="form-section-title" style="margin-bottom: 0.5rem;">Income Tiers</div>
+                            <div class="form-hint" style="margin-bottom: 0.5rem;">Define income requirements by age range. Leave age empty for open-ended.</div>
+                            <div id="income-tiers-container">
+                                <div class="income-tier-row" data-tier="0">
+                                    <div style="display: grid; grid-template-columns: 60px 60px 100px 1fr 30px; gap: 0.25rem; align-items: end; margin-bottom: 0.5rem;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label style="font-size: 0.7rem;">From Age</label>
+                                            <input type="number" class="tier-start-age" placeholder="-" min="50" max="100">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label style="font-size: 0.7rem;">To Age</label>
+                                            <input type="number" class="tier-end-age" value="67" min="50" max="100">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label style="font-size: 0.7rem;">Type</label>
+                                            <select class="tier-type" style="font-size: 0.75rem; padding: 0.3rem;">
+                                                <option value="fixed">Fixed (£/mo)</option>
+                                                <option value="percentage">% of Portfolio</option>
+                                                <option value="investment_gains">Real Returns</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <label style="font-size: 0.7rem;">Amount</label>
+                                            <input type="text" class="tier-amount" value="6000">
+                                        </div>
+                                        <button type="button" class="remove-tier-btn" onclick="removeIncomeTier(this)" style="background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9rem; padding: 0.35rem; margin-bottom: 0.15rem;">×</button>
+                                    </div>
                                 </div>
-                                <div class="form-group">
-                                    <label>Monthly After</label>
-                                    <input type="text" id="income-after" value="2500">
-                                    <div class="form-hint">After age threshold</div>
+                                <div class="income-tier-row" data-tier="1">
+                                    <div style="display: grid; grid-template-columns: 60px 60px 100px 1fr 30px; gap: 0.25rem; align-items: end; margin-bottom: 0.5rem;">
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="number" class="tier-start-age" value="67" min="50" max="100">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="number" class="tier-end-age" placeholder="-" min="50" max="100">
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <select class="tier-type" style="font-size: 0.75rem; padding: 0.3rem;">
+                                                <option value="fixed">Fixed (£/mo)</option>
+                                                <option value="percentage">% of Portfolio</option>
+                                                <option value="investment_gains">Real Returns</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group" style="margin-bottom: 0;">
+                                            <input type="text" class="tier-amount" value="4000">
+                                        </div>
+                                        <button type="button" class="remove-tier-btn" onclick="removeIncomeTier(this)" style="background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9rem; padding: 0.35rem; margin-bottom: 0.15rem;">×</button>
+                                    </div>
                                 </div>
                             </div>
+                            <button type="button" onclick="addIncomeTier()" style="background: var(--primary); color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; margin-top: 0.25rem;">+ Add Tier</button>
+                            <div class="form-hint" style="margin-top: 0.5rem; font-size: 0.7rem;">
+                                <strong>Fixed:</strong> £/month after tax | <strong>% of Portfolio:</strong> Annual % of initial portfolio | <strong>Real Returns:</strong> Investment gains minus inflation
+                            </div>
                         </div>
+                        <!-- Depletion Mode Fields -->
                         <div id="depletion-fields" class="hidden">
                             <div class="form-row-3">
                                 <div class="form-group">
@@ -2734,19 +3234,20 @@ const webUIHTML = `<!DOCTYPE html>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="form-row">
                             <div class="form-group">
                                 <label>Age Threshold</label>
                                 <input type="number" id="age-threshold" value="67">
-                                <div class="form-hint">Income changes at</div>
+                                <div class="form-hint">Income ratio changes at this age</div>
                             </div>
+                        </div>
+                        <div class="form-row" style="margin-top: 0.5rem;">
                             <div class="form-group">
                                 <label>Reference Person</label>
                                 <select id="ref-person">
                                     <option value="Person1">Person1</option>
                                     <option value="Person2">Person2</option>
                                 </select>
+                                <div class="form-hint">Age determines tier</div>
                             </div>
                         </div>
                     </div>
@@ -3405,6 +3906,121 @@ const webUIHTML = `<!DOCTYPE html>
             return '£' + Math.round(val);
         }
 
+        // Income tier management
+        let incomeTierIndex = 2; // Start at 2 since we have 2 default tiers
+
+        function addIncomeTier(data = null) {
+            const container = document.getElementById('income-tiers-container');
+            const idx = incomeTierIndex++;
+            const row = document.createElement('div');
+            row.className = 'income-tier-row';
+            row.dataset.tier = idx;
+
+            const startAge = data?.start_age || '';
+            const endAge = data?.end_age || '';
+            const tierType = data?.is_investment_gains ? 'investment_gains' : (data?.is_percentage ? 'percentage' : 'fixed');
+            const amount = data?.monthly_amount || '';
+
+            row.innerHTML =
+                '<div style="display: grid; grid-template-columns: 60px 60px 100px 1fr 30px; gap: 0.25rem; align-items: end; margin-bottom: 0.5rem;">' +
+                    '<div class="form-group" style="margin-bottom: 0;">' +
+                        '<input type="number" class="tier-start-age" value="' + startAge + '" placeholder="-" min="50" max="100">' +
+                    '</div>' +
+                    '<div class="form-group" style="margin-bottom: 0;">' +
+                        '<input type="number" class="tier-end-age" value="' + endAge + '" placeholder="-" min="50" max="100">' +
+                    '</div>' +
+                    '<div class="form-group" style="margin-bottom: 0;">' +
+                        '<select class="tier-type" style="font-size: 0.75rem; padding: 0.3rem;">' +
+                            '<option value="fixed"' + (tierType === 'fixed' ? ' selected' : '') + '>Fixed (£/mo)</option>' +
+                            '<option value="percentage"' + (tierType === 'percentage' ? ' selected' : '') + '>% of Portfolio</option>' +
+                            '<option value="investment_gains"' + (tierType === 'investment_gains' ? ' selected' : '') + '>Real Returns</option>' +
+                        '</select>' +
+                    '</div>' +
+                    '<div class="form-group" style="margin-bottom: 0;">' +
+                        '<input type="text" class="tier-amount" value="' + amount + '">' +
+                    '</div>' +
+                    '<button type="button" class="remove-tier-btn" onclick="removeIncomeTier(this)" style="background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9rem; padding: 0.35rem; margin-bottom: 0.15rem;">×</button>' +
+                '</div>';
+
+            container.appendChild(row);
+            updateTierAmountPlaceholders();
+        }
+
+        function removeIncomeTier(btn) {
+            const row = btn.closest('.income-tier-row');
+            const container = document.getElementById('income-tiers-container');
+            if (container.children.length > 1) {
+                row.remove();
+            }
+        }
+
+        function getIncomeTiers() {
+            const tiers = [];
+            document.querySelectorAll('.income-tier-row').forEach(row => {
+                const startAge = row.querySelector('.tier-start-age').value;
+                const endAge = row.querySelector('.tier-end-age').value;
+                const tierType = row.querySelector('.tier-type').value;
+                const amount = parseMoney(row.querySelector('.tier-amount').value);
+
+                const tier = {};
+                if (startAge) tier.start_age = parseInt(startAge);
+                if (endAge) tier.end_age = parseInt(endAge);
+
+                if (tierType === 'investment_gains') {
+                    tier.is_investment_gains = true;
+                    tier.monthly_amount = 0;
+                } else if (tierType === 'percentage') {
+                    tier.is_percentage = true;
+                    tier.monthly_amount = amount; // This is the percentage value
+                } else {
+                    tier.monthly_amount = amount;
+                }
+
+                tiers.push(tier);
+            });
+            return tiers;
+        }
+
+        function setIncomeTiers(tiers) {
+            const container = document.getElementById('income-tiers-container');
+            container.innerHTML = '';
+            incomeTierIndex = 0;
+
+            if (!tiers || tiers.length === 0) {
+                // Add default tiers
+                addIncomeTier({ end_age: 67, monthly_amount: 6000 });
+                addIncomeTier({ start_age: 67, monthly_amount: 4000 });
+            } else {
+                tiers.forEach(tier => addIncomeTier(tier));
+            }
+            updateTierAmountPlaceholders();
+        }
+
+        function updateTierAmountPlaceholders() {
+            document.querySelectorAll('.income-tier-row').forEach(row => {
+                const typeSelect = row.querySelector('.tier-type');
+                const amountInput = row.querySelector('.tier-amount');
+                if (typeSelect.value === 'investment_gains') {
+                    amountInput.placeholder = 'N/A';
+                    amountInput.disabled = true;
+                    amountInput.value = '';
+                } else if (typeSelect.value === 'percentage') {
+                    amountInput.placeholder = 'e.g. 4';
+                    amountInput.disabled = false;
+                } else {
+                    amountInput.placeholder = 'e.g. 4000';
+                    amountInput.disabled = false;
+                }
+            });
+        }
+
+        // Add event listener for tier type changes
+        document.getElementById('income-tiers-container').addEventListener('change', function(e) {
+            if (e.target.classList.contains('tier-type')) {
+                updateTierAmountPlaceholders();
+            }
+        });
+
         // Mortgage parts management
         let mortgagePartIndex = 0;
 
@@ -3556,12 +4172,15 @@ const webUIHTML = `<!DOCTYPE html>
                     depletion_growth_decline_percent: parseFloat(document.getElementById('depletion-growth-decline-percent').value) / 100 || 0.03
                 },
                 income_requirements: {
-                    monthly_before_age: isDepletion ? 0 : parseMoney(document.getElementById('income-before').value),
-                    monthly_after_age: isDepletion ? 0 : parseMoney(document.getElementById('income-after').value),
+                    // Use tiers for fixed income mode, legacy fields for depletion mode
+                    tiers: isDepletion ? [] : getIncomeTiers(),
+                    // Legacy fields (for depletion mode or backwards compatibility)
+                    monthly_before_age: 0,
+                    monthly_after_age: 0,
                     target_depletion_age: isDepletion ? parseInt(document.getElementById('depletion-age').value) : 0,
                     income_ratio_phase1: isDepletion ? parseFloat(document.getElementById('ratio-phase1').value) : 0,
                     income_ratio_phase2: isDepletion ? parseFloat(document.getElementById('ratio-phase2').value) : 0,
-                    age_threshold: parseInt(document.getElementById('age-threshold').value),
+                    age_threshold: parseInt(document.getElementById('age-threshold').value) || 67,
                     reference_person: document.getElementById('ref-person').value,
                     // Guardrails strategy
                     guardrails_enabled: document.getElementById('guardrails-enabled').checked,
@@ -4388,8 +5007,24 @@ const webUIHTML = `<!DOCTYPE html>
                 // Load income requirements
                 if (config.income_requirements) {
                     const ic = config.income_requirements;
-                    document.getElementById('income-before').value = ic.monthly_before_age || 6000;
-                    document.getElementById('income-after').value = ic.monthly_after_age || 4000;
+                    // Load tiers if available, otherwise convert legacy to tiers
+                    if (ic.tiers && ic.tiers.length > 0) {
+                        setIncomeTiers(ic.tiers);
+                    } else if (ic.monthly_before_age || ic.monthly_after_age) {
+                        // Convert legacy before/after to tiers
+                        const threshold = ic.age_threshold || 67;
+                        setIncomeTiers([
+                            { end_age: threshold, monthly_amount: ic.monthly_before_age || 6000 },
+                            { start_age: threshold, monthly_amount: ic.monthly_after_age || 4000 }
+                        ]);
+                    } else {
+                        // Default tiers
+                        setIncomeTiers([
+                            { end_age: 67, monthly_amount: 6000 },
+                            { start_age: 67, monthly_amount: 4000 }
+                        ]);
+                    }
+                    // Depletion mode fields
                     document.getElementById('depletion-age').value = ic.target_depletion_age || 90;
                     document.getElementById('ratio-phase1').value = ic.income_ratio_phase1 || 5;
                     document.getElementById('ratio-phase2').value = ic.income_ratio_phase2 || 3;
@@ -4608,8 +5243,10 @@ const webUIHTML = `<!DOCTYPE html>
                 if (targetAge) filenameParts.push('age' + targetAge.value);
             }
             if (currentMode === 'fixed') {
-                const incomeBefore = document.getElementById('income-before');
-                if (incomeBefore) filenameParts.push('inc' + Math.round(parseFloat(incomeBefore.value) || 0));
+                const tiers = getIncomeTiers();
+                if (tiers.length > 0 && tiers[0].monthly_amount) {
+                    filenameParts.push('inc' + Math.round(tiers[0].monthly_amount));
+                }
             }
 
             filenameParts.push(timestamp);

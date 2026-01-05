@@ -67,16 +67,38 @@ type FinancialConfig struct {
 	DepletionGrowthDeclinePercent float64 `yaml:"depletion_growth_decline_percent" json:"depletion_growth_decline_percent"` // Percentage to decline (e.g., 0.03 = 3%, so 7% -> 4%)
 }
 
+// IncomeTier represents a single income tier with an age range
+// Tiers are specified with start and end ages. Use nil (omit in YAML) for open-ended ranges:
+//   - end_age: 64 → from start until age 64
+//   - start_age: 64, end_age: 70 → from age 64 to 70
+//   - start_age: 70 → from age 70 until end
+//
+// Income types (mutually exclusive):
+//   - Fixed: MonthlyAmount is £/month
+//   - Percentage: IsPercentage=true, MonthlyAmount is annual % of initial portfolio
+//   - Investment Gains: IsInvestmentGains=true, income = real returns (growth - inflation)
+type IncomeTier struct {
+	StartAge           *int    `yaml:"start_age,omitempty" json:"start_age,omitempty"`               // Age when tier starts (nil = from retirement)
+	EndAge             *int    `yaml:"end_age,omitempty" json:"end_age,omitempty"`                   // Age when tier ends (nil = until simulation end)
+	MonthlyAmount      float64 `yaml:"monthly_amount" json:"monthly_amount"`                         // Monthly income (£) or percentage if IsPercentage
+	Ratio              float64 `yaml:"ratio" json:"ratio"`                                           // For depletion mode: ratio relative to other tiers
+	IsPercentage       bool    `yaml:"is_percentage,omitempty" json:"is_percentage"`                 // If true, MonthlyAmount is annual % of initial portfolio
+	IsInvestmentGains  bool    `yaml:"is_investment_gains,omitempty" json:"is_investment_gains"`     // If true, income = investment gains after inflation
+}
+
 // IncomeConfig holds income requirement settings
 type IncomeConfig struct {
-	// Fixed income mode (used when TargetDepletionAge is 0)
-	MonthlyBeforeAge float64 `yaml:"monthly_before_age" json:"monthly_before_age"`
-	MonthlyAfterAge  float64 `yaml:"monthly_after_age" json:"monthly_after_age"`
+	// Tiered income (new system) - takes precedence over legacy fields if non-empty
+	Tiers []IncomeTier `yaml:"tiers,omitempty" json:"tiers,omitempty"`
+
+	// Legacy fixed income mode (used when Tiers is empty and TargetDepletionAge is 0)
+	MonthlyBeforeAge float64 `yaml:"monthly_before_age,omitempty" json:"monthly_before_age,omitempty"`
+	MonthlyAfterAge  float64 `yaml:"monthly_after_age,omitempty" json:"monthly_after_age,omitempty"`
 
 	// Depletion mode (used when TargetDepletionAge > 0)
 	TargetDepletionAge int     `yaml:"target_depletion_age" json:"target_depletion_age"` // If > 0, calculate income to deplete at this age
-	IncomeRatioPhase1  float64 `yaml:"income_ratio_phase1" json:"income_ratio_phase1"`   // e.g., 5.0 for 5:3 ratio
-	IncomeRatioPhase2  float64 `yaml:"income_ratio_phase2" json:"income_ratio_phase2"`   // e.g., 3.0 for 5:3 ratio
+	IncomeRatioPhase1  float64 `yaml:"income_ratio_phase1" json:"income_ratio_phase1"`   // Legacy: e.g., 5.0 for 5:3 ratio (used if Tiers empty)
+	IncomeRatioPhase2  float64 `yaml:"income_ratio_phase2" json:"income_ratio_phase2"`   // Legacy: e.g., 3.0 for 5:3 ratio (used if Tiers empty)
 
 	// Guardrails Strategy (Guyton-Klinger) - dynamic withdrawal adjustments
 	GuardrailsEnabled    bool    `yaml:"guardrails_enabled" json:"guardrails_enabled"`         // Enable guardrails adjustments
@@ -89,8 +111,8 @@ type IncomeConfig struct {
 	VPWFloor   float64 `yaml:"vpw_floor" json:"vpw_floor"`     // Minimum annual withdrawal (optional floor)
 	VPWCeiling float64 `yaml:"vpw_ceiling" json:"vpw_ceiling"` // Maximum as multiple of floor (e.g., 1.5 = 150%)
 
-	// Common fields
-	AgeThreshold    int    `yaml:"age_threshold" json:"age_threshold"`
+	// Legacy common field (used when Tiers is empty)
+	AgeThreshold    int    `yaml:"age_threshold,omitempty" json:"age_threshold,omitempty"`
 	ReferencePerson string `yaml:"reference_person" json:"reference_person"`
 }
 
@@ -99,7 +121,122 @@ func (ic *IncomeConfig) IsDepletionMode() bool {
 	return ic.TargetDepletionAge > 0
 }
 
-// GetIncomeAmounts returns monthly income amounts for a given multiplier
+// HasTiers returns true if tiered income is configured
+func (ic *IncomeConfig) HasTiers() bool {
+	return len(ic.Tiers) > 0
+}
+
+// HasPercentageTiers returns true if any tier uses percentage-based income
+func (ic *IncomeConfig) HasPercentageTiers() bool {
+	for _, tier := range ic.Tiers {
+		if tier.IsPercentage {
+			return true
+		}
+	}
+	return false
+}
+
+// HasInvestmentGainsTiers returns true if any tier uses investment gains income
+func (ic *IncomeConfig) HasInvestmentGainsTiers() bool {
+	for _, tier := range ic.Tiers {
+		if tier.IsInvestmentGains {
+			return true
+		}
+	}
+	return false
+}
+
+// GetTierForAge returns the income tier applicable for a given age
+// Returns nil if no tier matches (shouldn't happen with properly configured tiers)
+func (ic *IncomeConfig) GetTierForAge(age int) *IncomeTier {
+	for i := range ic.Tiers {
+		tier := &ic.Tiers[i]
+		// Check if age falls within this tier's range
+		startOK := tier.StartAge == nil || age >= *tier.StartAge
+		endOK := tier.EndAge == nil || age < *tier.EndAge
+		if startOK && endOK {
+			return tier
+		}
+	}
+	// If no tier matches, return the last tier (open-ended)
+	if len(ic.Tiers) > 0 {
+		return &ic.Tiers[len(ic.Tiers)-1]
+	}
+	return nil
+}
+
+// GetMonthlyIncomeForAge returns the monthly income for a given age
+// initialPortfolio is used when tiers specify percentage-based income
+// multiplier is used in depletion mode to scale ratio-based tiers
+// Note: For IsInvestmentGains tiers, returns -1 (calculation happens in simulation.go)
+func (ic *IncomeConfig) GetMonthlyIncomeForAge(age int, initialPortfolio, multiplier float64) float64 {
+	if !ic.HasTiers() {
+		// Legacy mode: use before/after age threshold
+		if ic.IsDepletionMode() {
+			if age < ic.AgeThreshold {
+				return ic.IncomeRatioPhase1 * multiplier
+			}
+			return ic.IncomeRatioPhase2 * multiplier
+		}
+		if age < ic.AgeThreshold {
+			return ic.MonthlyBeforeAge
+		}
+		return ic.MonthlyAfterAge
+	}
+
+	tier := ic.GetTierForAge(age)
+	if tier == nil {
+		return 0
+	}
+
+	// Investment gains tiers: return -1 to signal simulation.go should calculate
+	// Income = (pension × pension_growth_rate + savings × savings_growth_rate) - inflation
+	if tier.IsInvestmentGains {
+		return -1
+	}
+
+	// In depletion mode, use ratios scaled by multiplier
+	if ic.IsDepletionMode() && tier.Ratio > 0 {
+		return tier.Ratio * multiplier
+	}
+
+	// For percentage-based tiers: MonthlyAmount is annual % of initial portfolio
+	// e.g., 6% of £1M = £60k/year = £5k/month
+	if tier.IsPercentage {
+		annualAmount := initialPortfolio * (tier.MonthlyAmount / 100.0)
+		return annualAmount / 12.0
+	}
+
+	// Absolute monthly amount
+	return tier.MonthlyAmount
+}
+
+// GetAnnualIncomeForAge returns the annual income for a given age
+func (ic *IncomeConfig) GetAnnualIncomeForAge(age int, initialPortfolio, multiplier float64) float64 {
+	return ic.GetMonthlyIncomeForAge(age, initialPortfolio, multiplier) * 12
+}
+
+// GetRatioForAge returns the ratio for a tier at a given age (for depletion mode)
+func (ic *IncomeConfig) GetRatioForAge(age int) float64 {
+	if !ic.HasTiers() {
+		// Legacy mode
+		if age < ic.AgeThreshold {
+			return ic.IncomeRatioPhase1
+		}
+		return ic.IncomeRatioPhase2
+	}
+
+	tier := ic.GetTierForAge(age)
+	if tier == nil {
+		return 1.0
+	}
+	if tier.Ratio > 0 {
+		return tier.Ratio
+	}
+	return 1.0
+}
+
+// GetIncomeAmounts returns monthly income amounts for a given multiplier (legacy compatibility)
 // In fixed mode, multiplier is ignored and fixed amounts are returned
 // In depletion mode, returns amounts based on ratios and multiplier
 func (ic *IncomeConfig) GetIncomeAmounts(multiplier float64) (beforeAge, afterAge float64) {
@@ -107,6 +244,69 @@ func (ic *IncomeConfig) GetIncomeAmounts(multiplier float64) (beforeAge, afterAg
 		return ic.MonthlyBeforeAge, ic.MonthlyAfterAge
 	}
 	return ic.IncomeRatioPhase1 * multiplier, ic.IncomeRatioPhase2 * multiplier
+}
+
+// ConvertLegacyToTiers converts legacy before/after age fields to tiered format
+// This is useful for migration and consistent internal handling
+func (ic *IncomeConfig) ConvertLegacyToTiers() {
+	if ic.HasTiers() {
+		return // Already has tiers
+	}
+
+	threshold := ic.AgeThreshold
+	if threshold == 0 {
+		threshold = 67 // Default
+	}
+
+	if ic.IsDepletionMode() {
+		ic.Tiers = []IncomeTier{
+			{EndAge: &threshold, Ratio: ic.IncomeRatioPhase1},
+			{StartAge: &threshold, Ratio: ic.IncomeRatioPhase2},
+		}
+	} else {
+		ic.Tiers = []IncomeTier{
+			{EndAge: &threshold, MonthlyAmount: ic.MonthlyBeforeAge},
+			{StartAge: &threshold, MonthlyAmount: ic.MonthlyAfterAge},
+		}
+	}
+}
+
+// DescribeTiers returns a human-readable description of the income tiers
+func (ic *IncomeConfig) DescribeTiers(initialPortfolio float64) string {
+	if !ic.HasTiers() {
+		return ""
+	}
+
+	var parts []string
+	for _, tier := range ic.Tiers {
+		var ageRange string
+		if tier.StartAge == nil && tier.EndAge != nil {
+			ageRange = "until " + strconv.Itoa(*tier.EndAge)
+		} else if tier.StartAge != nil && tier.EndAge == nil {
+			ageRange = strconv.Itoa(*tier.StartAge) + "+"
+		} else if tier.StartAge != nil && tier.EndAge != nil {
+			ageRange = strconv.Itoa(*tier.StartAge) + "-" + strconv.Itoa(*tier.EndAge)
+		} else {
+			ageRange = "all ages"
+		}
+
+		var amount string
+		if ic.IsDepletionMode() && tier.Ratio > 0 {
+			amount = strconv.FormatFloat(tier.Ratio, 'f', 1, 64) + "x"
+		} else if tier.IsPercentage {
+			amount = strconv.FormatFloat(tier.MonthlyAmount, 'f', 1, 64) + "%"
+			if initialPortfolio > 0 {
+				monthly := initialPortfolio * (tier.MonthlyAmount / 100.0) / 12.0
+				amount += " (£" + formatDefaultMoney(monthly) + "/mo)"
+			}
+		} else {
+			amount = "£" + formatDefaultMoney(tier.MonthlyAmount) + "/mo"
+		}
+
+		parts = append(parts, ageRange+": "+amount)
+	}
+
+	return strings.Join(parts, ", ")
 }
 
 // MortgagePartConfig holds details for one mortgage part
