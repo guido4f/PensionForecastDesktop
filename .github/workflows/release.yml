@@ -155,3 +155,19 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete old releases (keep last 3)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Current releases:"
+          gh release list
+          echo ""
+          echo "Deleting releases older than the 3 most recent..."
+          gh release list --json tagName -q '.[].tagName' | tail -n +4 | while read -r tag; do
+            echo "Deleting old release $tag"
+            gh release delete "$tag" --yes --cleanup-tag
+          done
+          echo ""
+          echo "Remaining releases:"
+          gh release list
