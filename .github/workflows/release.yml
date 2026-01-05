@@ -22,7 +22,7 @@ jobs:
       - name: Run tests
         run: go test -tags console -v ./...
 
-  build-console:
+  build-linux:
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -33,61 +33,35 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Build console versions
-        run: make console-all
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: console-builds
-          path: build/*
-
-  build-web:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-
-      - name: Build web server versions
-        run: make web-all
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-builds
-          path: build/*
-
-  build-ui-linux:
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.21'
-
-      - name: Install dependencies
+      - name: Install UI dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
 
-      - name: Build Linux UI
-        run: make ui-linux
+      - name: Build all Linux binaries
+        run: |
+          mkdir -p dist/linux
+          # Console
+          GOOS=linux GOARCH=amd64 go build -tags console -ldflags "-s -w" -o dist/linux/goPensionForecast-linux-amd64-console .
+          # Web
+          GOOS=linux GOARCH=amd64 go build -tags console -ldflags "-s -w" -o dist/linux/goPensionForecast-linux-amd64-web .
+          # UI (requires CGO)
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/linux/goPensionForecast-linux-amd64-ui .
+          # Copy scripts
+          cp scripts/linux/run.sh dist/linux/
+          cp scripts/README.txt dist/linux/
+          chmod +x dist/linux/*.sh dist/linux/goPensionForecast-*
+          # Create ZIP
+          cd dist && zip -r goPensionForecast-linux-amd64.zip linux/
 
-      - name: Upload artifacts
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ui-linux
-          path: build/*
+          name: linux-release
+          path: dist/goPensionForecast-linux-amd64.zip
+          retention-days: 1
 
-  build-ui-windows:
+  build-windows:
     runs-on: windows-latest
     needs: test
     steps:
@@ -98,20 +72,32 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Build Windows UI
+      - name: Build all Windows binaries
         shell: powershell
         run: |
+          New-Item -ItemType Directory -Force -Path dist/windows
+          # Console
+          $env:CGO_ENABLED="0"
+          go build -tags console -ldflags "-s -w" -o dist/windows/goPensionForecast-windows-amd64-console.exe .
+          # Web
+          go build -tags console -ldflags "-s -w" -o dist/windows/goPensionForecast-windows-amd64-web.exe .
+          # UI (requires CGO)
           $env:CGO_ENABLED="1"
-          New-Item -ItemType Directory -Force -Path build
-          go build -ldflags "-s -w" -o build/goPensionForecast-windows-amd64-ui.exe .
+          go build -ldflags "-s -w" -o dist/windows/goPensionForecast-windows-amd64-ui.exe .
+          # Copy scripts
+          Copy-Item scripts/windows/run.bat dist/windows/
+          Copy-Item scripts/README.txt dist/windows/
+          # Create ZIP
+          Compress-Archive -Path dist/windows/* -DestinationPath dist/goPensionForecast-windows-amd64.zip
 
-      - name: Upload artifacts
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ui-windows
-          path: build/*
+          name: windows-release
+          path: dist/goPensionForecast-windows-amd64.zip
+          retention-days: 1
 
-  build-ui-macos:
+  build-macos:
     runs-on: macos-latest
     needs: test
     steps:
@@ -122,23 +108,33 @@ jobs:
         with:
           go-version: '1.21'
 
-      - name: Build macOS UI (ARM64)
+      - name: Build all macOS binaries
         run: |
-          mkdir -p build
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o build/goPensionForecast-macos-arm64-ui .
+          mkdir -p dist/macos
+          # ARM64 builds
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags console -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-arm64-console .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -tags console -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-arm64-web .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-arm64-ui .
+          # AMD64 builds
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags console -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-amd64-console .
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -tags console -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-amd64-web .
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/macos/goPensionForecast-macos-amd64-ui .
+          # Copy scripts
+          cp scripts/macos/run.sh dist/macos/
+          cp scripts/README.txt dist/macos/
+          chmod +x dist/macos/*.sh dist/macos/goPensionForecast-*
+          # Create ZIP (includes both architectures)
+          cd dist && zip -r goPensionForecast-macos.zip macos/
 
-      - name: Build macOS UI (Intel)
-        run: |
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o build/goPensionForecast-macos-amd64-ui .
-
-      - name: Upload artifacts
+      - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ui-macos
-          path: build/*
+          name: macos-release
+          path: dist/goPensionForecast-macos.zip
+          retention-days: 1
 
   create-release:
-    needs: [build-console, build-web, build-ui-linux, build-ui-windows, build-ui-macos]
+    needs: [build-linux, build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -151,19 +147,8 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release
-          find artifacts -type f -exec cp {} release/ \;
-          cd release
-          # Set execute permissions for Linux and macOS binaries
-          chmod +x *linux* *macos* 2>/dev/null || true
-          # Copy quarantine removal script for macOS
-          cp ../scripts/remove-quarantine.sh .
-          chmod +x remove-quarantine.sh
-          # Create zip files for each platform
-          zip goPensionForecast-linux-amd64.zip *linux-amd64*
-          zip goPensionForecast-macos-arm64.zip *macos-arm64* remove-quarantine.sh
-          zip goPensionForecast-macos-amd64.zip *macos-amd64* remove-quarantine.sh
-          zip goPensionForecast-windows-amd64.zip *windows-amd64*
-          ls -la
+          find artifacts -name "*.zip" -exec cp {} release/ \;
+          ls -la release/
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -171,8 +156,7 @@ jobs:
           files: |
             release/goPensionForecast-linux-amd64.zip
             release/goPensionForecast-windows-amd64.zip
-            release/goPensionForecast-macos-arm64.zip
-            release/goPensionForecast-macos-amd64.zip
+            release/goPensionForecast-macos.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
