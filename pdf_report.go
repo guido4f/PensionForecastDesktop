@@ -277,23 +277,15 @@ func (r *PDFActionPlanReport) addTitlePage() {
 	r.pdf.SetFont("Arial", "", 11)
 	r.pdf.SetTextColor(50, 50, 50)
 
-	// Calculate the year when age threshold is reached
-	thresholdYear := refBirthYear + r.config.IncomeRequirements.AgeThreshold
-
-	// Get actual income (handles depletion mode where config values are 0)
-	monthlyBefore, monthlyAfter := r.getIncomeRequirements()
-
-	// Phase 1: Before age threshold
-	phase1Text := fmt.Sprintf("%s/month from 6 April %d to 5 April %d (until age %d)",
-		FormatMoneyPDF(monthlyBefore),
-		startYear, thresholdYear, r.config.IncomeRequirements.AgeThreshold)
-	r.pdf.CellFormat(contentWidth, 7, phase1Text, "LR", 1, "C", true, 0, "")
-
-	// Phase 2: After age threshold
-	phase2Text := fmt.Sprintf("%s/month from 6 April %d to 5 April %d (age %d onwards)",
-		FormatMoneyPDF(monthlyAfter),
-		thresholdYear, endYear+1, r.config.IncomeRequirements.AgeThreshold)
-	r.pdf.CellFormat(contentWidth, 7, phase2Text, "LRB", 1, "C", true, 0, "")
+	// Display income tiers
+	incomeLines := r.getIncomeRequirementLines(startYear, endYear, refBirthYear)
+	for i, line := range incomeLines {
+		border := "LR"
+		if i == len(incomeLines)-1 {
+			border = "LRB"
+		}
+		r.pdf.CellFormat(contentWidth, 7, line, border, 1, "C", true, 0, "")
+	}
 
 	// Disclaimer
 	r.pdf.Ln(15)
@@ -337,27 +329,22 @@ func (r *PDFActionPlanReport) addStrategyOverview() {
 	}
 	refPerson := r.config.GetReferencePerson()
 	refBirthYear := GetBirthYear(refPerson.BirthDate)
-	thresholdYear := refBirthYear + r.config.IncomeRequirements.AgeThreshold
 
 	// Period row
 	r.pdf.CellFormat(35, 5, "Simulation Period:", "", 0, "L", false, 0, "")
 	r.pdf.CellFormat(contentWidth-35, 5, fmt.Sprintf("6 April %d to 5 April %d (%d years)",
 		startYear, endYear+1, endYear-startYear+1), "", 1, "L", false, 0, "")
 
-	// Get actual income (handles depletion mode where config values are 0)
-	monthlyBefore, monthlyAfter := r.getIncomeRequirements()
-
-	// Phase 1 income
-	r.pdf.CellFormat(35, 5, "Phase 1 Income:", "", 0, "L", false, 0, "")
-	r.pdf.CellFormat(contentWidth-35, 5, fmt.Sprintf("%s/month (6 Apr %d to 5 Apr %d, until age %d)",
-		FormatMoneyPDF(monthlyBefore),
-		startYear, thresholdYear, r.config.IncomeRequirements.AgeThreshold), "", 1, "L", false, 0, "")
-
-	// Phase 2 income
-	r.pdf.CellFormat(35, 5, "Phase 2 Income:", "", 0, "L", false, 0, "")
-	r.pdf.CellFormat(contentWidth-35, 5, fmt.Sprintf("%s/month (6 Apr %d to 5 Apr %d, age %d+)",
-		FormatMoneyPDF(monthlyAfter),
-		thresholdYear, endYear+1, r.config.IncomeRequirements.AgeThreshold), "", 1, "L", false, 0, "")
+	// Display income tiers
+	incomeLines := r.getIncomeRequirementLines(startYear, endYear, refBirthYear)
+	for i, line := range incomeLines {
+		label := ""
+		if i == 0 {
+			label = "Income:"
+		}
+		r.pdf.CellFormat(35, 5, label, "", 0, "L", false, 0, "")
+		r.pdf.CellFormat(contentWidth-35, 5, line, "", 1, "L", false, 0, "")
+	}
 
 	r.pdf.Ln(5)
 
@@ -1645,4 +1632,74 @@ func (r *PDFActionPlanReport) getIncomeRequirements() (monthlyBefore, monthlyAft
 	}
 
 	return monthlyBefore, monthlyAfter
+}
+
+// getIncomeRequirementLines returns formatted strings describing income requirements for PDF display
+func (r *PDFActionPlanReport) getIncomeRequirementLines(startYear, endYear, refBirthYear int) []string {
+	var lines []string
+
+	// Calculate initial portfolio for percentage display
+	initialPortfolio := 0.0
+	for _, p := range r.config.People {
+		initialPortfolio += p.Pension + p.TaxFreeSavings
+	}
+
+	if r.config.IncomeRequirements.HasTiers() {
+		// Tiered income system
+		for _, tier := range r.config.IncomeRequirements.Tiers {
+			// Build age range and date range
+			var ageRange, dateRange string
+			tierStartYear := startYear
+			tierEndYear := endYear + 1
+
+			if tier.StartAge != nil {
+				tierStartYear = refBirthYear + *tier.StartAge
+			}
+			if tier.EndAge != nil {
+				tierEndYear = refBirthYear + *tier.EndAge
+			}
+
+			if tier.StartAge == nil && tier.EndAge != nil {
+				ageRange = fmt.Sprintf("until age %d", *tier.EndAge)
+				dateRange = fmt.Sprintf("6 Apr %d to 5 Apr %d", startYear, tierEndYear)
+			} else if tier.StartAge != nil && tier.EndAge == nil {
+				ageRange = fmt.Sprintf("age %d onwards", *tier.StartAge)
+				dateRange = fmt.Sprintf("6 Apr %d to 5 Apr %d", tierStartYear, endYear+1)
+			} else if tier.StartAge != nil && tier.EndAge != nil {
+				ageRange = fmt.Sprintf("age %d to %d", *tier.StartAge, *tier.EndAge)
+				dateRange = fmt.Sprintf("6 Apr %d to 5 Apr %d", tierStartYear, tierEndYear)
+			} else {
+				ageRange = "all ages"
+				dateRange = fmt.Sprintf("6 Apr %d to 5 Apr %d", startYear, endYear+1)
+			}
+
+			// Build amount description
+			var amount string
+			if tier.IsInvestmentGains {
+				amount = "Real Returns (growth - inflation)"
+			} else if tier.IsPercentage {
+				monthly := initialPortfolio * (tier.MonthlyAmount / 100.0) / 12.0
+				amount = fmt.Sprintf("%.1f%% of portfolio (%s/month)", tier.MonthlyAmount, FormatMoneyPDF(monthly))
+			} else {
+				amount = fmt.Sprintf("%s/month", FormatMoneyPDF(tier.MonthlyAmount))
+			}
+
+			lines = append(lines, fmt.Sprintf("%s - %s (%s)", amount, ageRange, dateRange))
+		}
+	} else {
+		// Legacy 2-phase income
+		thresholdYear := refBirthYear + r.config.IncomeRequirements.AgeThreshold
+		monthlyBefore, monthlyAfter := r.getIncomeRequirements()
+
+		lines = append(lines, fmt.Sprintf("%s/month until age %d (6 Apr %d to 5 Apr %d)",
+			FormatMoneyPDF(monthlyBefore),
+			r.config.IncomeRequirements.AgeThreshold,
+			startYear, thresholdYear))
+		lines = append(lines, fmt.Sprintf("%s/month age %d+ (6 Apr %d to 5 Apr %d)",
+			FormatMoneyPDF(monthlyAfter),
+			r.config.IncomeRequirements.AgeThreshold,
+			thresholdYear, endYear+1))
+	}
+
+	return lines
 }

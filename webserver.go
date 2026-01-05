@@ -1027,6 +1027,11 @@ func (ws *WebServer) buildConfig(req *APISimulationRequest) *Config {
 	if config.Financial.PensionGrowthRate == 0 && ws.config != nil {
 		config.Financial = ws.config.Financial
 	}
+	// Use default income requirements if not set (check for tiers or legacy monthly amounts)
+	if !config.IncomeRequirements.HasTiers() && config.IncomeRequirements.MonthlyBeforeAge == 0 &&
+		config.IncomeRequirements.MonthlyAfterAge == 0 && config.IncomeRequirements.TargetDepletionAge == 0 && ws.config != nil {
+		config.IncomeRequirements = ws.config.IncomeRequirements
+	}
 	if config.Simulation.StartYear == 0 {
 		if ws.config != nil {
 			config.Simulation = ws.config.Simulation
