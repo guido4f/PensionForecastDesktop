@@ -144,6 +144,7 @@ func (ws *WebServer) Start() error {
 	mux.HandleFunc("/api/export-pdf", ws.handleExportPDF)
 	mux.HandleFunc("/api/download-pdf", ws.handleDownloadPDF)
 	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
+	mux.HandleFunc("/api/stock-indices", ws.handleStockIndices)
 
 	// Listen on the address (use :0 for auto-assign)
 	listener, err := net.Listen("tcp", ws.addr)
@@ -190,6 +191,7 @@ func (ws *WebServer) StartForEmbedded() (url string, cleanup func(), err error) 
 	mux.HandleFunc("/api/export-pdf", ws.handleExportPDF)
 	mux.HandleFunc("/api/download-pdf", ws.handleDownloadPDF)
 	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
+	mux.HandleFunc("/api/stock-indices", ws.handleStockIndices)
 
 	// Listen on the address (use :0 for auto-assign)
 	listener, err := net.Listen("tcp", ws.addr)
@@ -1196,6 +1198,30 @@ func (ws *WebServer) handleOpenFolder(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"message": "Folder opened",
 	})
+}
+
+// StockIndicesResponse represents the response containing available stock indices
+type StockIndicesResponse struct {
+	Indices   []StockIndex       `json:"indices"`
+	ByRegion  map[string][]StockIndex `json:"by_region"`
+	Periods   []int              `json:"periods"` // Available return periods (3, 5, 10, 25, etc.)
+}
+
+// handleStockIndices returns all available stock market indices with their historical returns
+func (ws *WebServer) handleStockIndices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	response := StockIndicesResponse{
+		Indices:  StockIndices,
+		ByRegion: GetIndicesByRegion(),
+		Periods:  GetAllReturnPeriods(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // APIPDFExportRequest extends APISimulationRequest with strategy index for PDF export
@@ -3339,6 +3365,46 @@ const webUIHTML = `<!DOCTYPE html>
                 <div class="card">
                     <h2 class="collapsible collapsed">Financial Settings</h2>
                     <div class="collapse-content collapsed">
+                        <!-- Stock Index Selector -->
+                        <div class="form-row-2" style="margin-bottom: 1rem;">
+                            <div class="form-group">
+                                <label>Growth Rate Source</label>
+                                <select id="growth-rate-source" onchange="onGrowthSourceChange()">
+                                    <option value="custom">Custom Rates</option>
+                                    <optgroup label="UK">
+                                        <option value="ftse100">FTSE 100</option>
+                                        <option value="ftse250">FTSE 250</option>
+                                        <option value="ftseAllShare">FTSE All-Share</option>
+                                    </optgroup>
+                                    <optgroup label="US">
+                                        <option value="sp500">S&P 500</option>
+                                        <option value="nasdaq">NASDAQ</option>
+                                        <option value="dowJones">Dow Jones</option>
+                                    </optgroup>
+                                    <optgroup label="Global">
+                                        <option value="msciWorld">MSCI World</option>
+                                        <option value="ftseAllWorld">FTSE All-World</option>
+                                    </optgroup>
+                                    <optgroup label="Other">
+                                        <option value="dax">DAX (Germany)</option>
+                                        <option value="nikkei225">Nikkei 225 (Japan)</option>
+                                    </optgroup>
+                                </select>
+                                <div class="form-hint">Select index or custom</div>
+                            </div>
+                            <div class="form-group" id="period-selector-group" style="display:none;">
+                                <label>Return Period</label>
+                                <select id="growth-rate-period" onchange="onGrowthPeriodChange()">
+                                    <option value="0">Long-term Default</option>
+                                    <option value="3">3 Year</option>
+                                    <option value="5">5 Year</option>
+                                    <option value="10">10 Year</option>
+                                    <option value="25">25 Year</option>
+                                </select>
+                                <div class="form-hint">Historical return period</div>
+                            </div>
+                        </div>
+                        <div id="index-description" style="display:none; font-size:0.85rem; color:var(--text-muted); margin-bottom:1rem; padding:0.5rem; background:var(--surface-hover); border-radius:4px;"></div>
                         <div class="form-row-4">
                             <div class="form-group">
                                 <label>Pension %</label>
@@ -3893,6 +3959,78 @@ const webUIHTML = `<!DOCTYPE html>
         document.getElementById('growth-decline-enabled').addEventListener('change', function() {
             document.getElementById('growth-decline-fields').style.display = this.checked ? 'block' : 'none';
         });
+
+        // Stock indices data (loaded from API)
+        let stockIndicesData = null;
+
+        // Load stock indices data on page load
+        async function loadStockIndices() {
+            try {
+                const res = await fetch('/api/stock-indices');
+                stockIndicesData = await res.json();
+            } catch (e) {
+                console.error('Failed to load stock indices:', e);
+            }
+        }
+        loadStockIndices();
+
+        // Handle growth rate source change
+        function onGrowthSourceChange() {
+            const source = document.getElementById('growth-rate-source').value;
+            const periodGroup = document.getElementById('period-selector-group');
+            const descDiv = document.getElementById('index-description');
+            const pensionInput = document.getElementById('pension-growth');
+            const savingsInput = document.getElementById('savings-growth');
+
+            if (source === 'custom') {
+                periodGroup.style.display = 'none';
+                descDiv.style.display = 'none';
+                pensionInput.disabled = false;
+                savingsInput.disabled = false;
+            } else {
+                periodGroup.style.display = 'block';
+                pensionInput.disabled = true;
+                savingsInput.disabled = true;
+
+                // Find the index data
+                if (stockIndicesData) {
+                    const idx = stockIndicesData.indices.find(i => i.id === source);
+                    if (idx) {
+                        descDiv.innerHTML = '<strong>' + idx.name + '</strong>: ' + idx.description +
+                            ' (Since ' + idx.inception_year + ', ' + idx.volatility + ' volatility)';
+                        descDiv.style.display = 'block';
+
+                        // Set growth rates based on period
+                        onGrowthPeriodChange();
+                    }
+                }
+            }
+        }
+
+        // Handle growth rate period change
+        function onGrowthPeriodChange() {
+            const source = document.getElementById('growth-rate-source').value;
+            const period = parseInt(document.getElementById('growth-rate-period').value);
+            const pensionInput = document.getElementById('pension-growth');
+            const savingsInput = document.getElementById('savings-growth');
+
+            if (source !== 'custom' && stockIndicesData) {
+                const idx = stockIndicesData.indices.find(i => i.id === source);
+                if (idx) {
+                    let rate = idx.default_return;
+                    if (period > 0) {
+                        const periodData = idx.returns.find(r => r.years === period);
+                        if (periodData) {
+                            rate = periodData.return;
+                        }
+                    }
+                    // Convert to percentage and set both inputs
+                    const pct = (rate * 100).toFixed(1);
+                    pensionInput.value = pct;
+                    savingsInput.value = pct;
+                }
+            }
+        }
 
         // Parse money value (handles k, m suffixes)
         function parseMoney(val) {
@@ -5128,15 +5266,20 @@ const webUIHTML = `<!DOCTYPE html>
 
         // Download strategies as CSV
         function downloadStrategyCSV() {
+            try {
+            console.log('downloadStrategyCSV: starting');
             if (!lastResults || !lastResults.results || lastResults.results.length === 0) {
                 alert('No results to download. Run a simulation first.');
                 return;
             }
+            console.log('downloadStrategyCSV: have results');
 
             const modeNames = { 'fixed': 'Fixed Income', 'depletion': 'Depletion', 'pension-only': 'Pension Only', 'pension-to-isa': 'Pension to ISA' };
             const mode = modeNames[currentMode] || currentMode;
             const pensionGrowth = document.getElementById('pension-growth').value + '%';
             const savingsGrowth = document.getElementById('savings-growth').value + '%';
+            const isDepletionMode = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
+            console.log('downloadStrategyCSV: mode=' + mode + ', isDepletion=' + isDepletionMode);
 
             // Build CSV content
             let csv = '';
@@ -5144,11 +5287,123 @@ const webUIHTML = `<!DOCTYPE html>
             // Add simulation parameters header
             csv += 'Pension Forecast Strategy Export\n';
             csv += 'Mode,' + escapeCSV(mode) + '\n';
+
+            // Financial settings
             csv += 'Pension Growth Rate,' + pensionGrowth + '\n';
             csv += 'Savings Growth Rate,' + savingsGrowth + '\n';
+            csv += 'Inflation Rate,' + document.getElementById('income-inflation').value + '%\n';
+            csv += 'State Pension Amount,' + document.getElementById('state-pension').value + '\n';
+
+            // Growth decline
+            const growthDecline = document.getElementById('growth-decline-enabled');
+            if (growthDecline && growthDecline.checked) {
+                csv += 'Growth Decline Enabled,true\n';
+                csv += 'Pension Growth End Rate,' + document.getElementById('pension-growth-end').value + '%\n';
+                csv += 'Growth Decline Target Age,' + document.getElementById('growth-decline-target-age').value + '\n';
+            }
+
+            // Simulation settings
+            csv += 'Start Year,' + document.getElementById('sim-start').value + '\n';
+            csv += 'End Age,' + document.getElementById('sim-end').value + '\n';
+            if (isDepletionMode) {
+                const targetAge = document.getElementById('depletion-age');
+                if (targetAge) csv += 'Target Depletion Age,' + targetAge.value + '\n';
+            }
+
+            // Income settings - different for depletion vs fixed mode
+            if (isDepletionMode) {
+                const ratioPhase1 = document.getElementById('ratio-phase1');
+                const ratioPhase2 = document.getElementById('ratio-phase2');
+                if (ratioPhase1) csv += 'Income Ratio Phase 1,' + ratioPhase1.value + '\n';
+                if (ratioPhase2) csv += 'Income Ratio Phase 2,' + ratioPhase2.value + '\n';
+            } else {
+                const tiers = getIncomeTiers();
+                if (tiers.length > 0) {
+                    for (let i = 0; i < tiers.length; i++) {
+                        const tier = tiers[i];
+                        let tierType = 'Fixed Amount';
+                        if (tier.is_investment_gains) tierType = 'Investment Gains Only';
+                        else if (tier.is_percentage) tierType = 'Percentage';
+                        csv += 'Income Tier ' + (i+1) + ' Type,' + tierType + '\n';
+                        csv += 'Income Tier ' + (i+1) + ' Amount,' + (tier.monthly_amount || 0) + '\n';
+                        if (tier.start_age) csv += 'Income Tier ' + (i+1) + ' Start Age,' + tier.start_age + '\n';
+                        if (tier.end_age) csv += 'Income Tier ' + (i+1) + ' End Age,' + tier.end_age + '\n';
+                    }
+                }
+            }
+
+            // People configuration
+            csv += '\nPEOPLE CONFIGURATION\n';
+
+            // Person 1
+            csv += 'Person,' + escapeCSV(document.getElementById('p1-name').value) + '\n';
+            csv += '  Birth Date,' + document.getElementById('p1-birth').value + '\n';
+            csv += '  Retirement Age,' + document.getElementById('p1-retire').value + '\n';
+            csv += '  State Pension Age,' + document.getElementById('p1-spa').value + '\n';
+            csv += '  Pension Pot,' + document.getElementById('p1-pension').value + '\n';
+            csv += '  ISA Balance,' + document.getElementById('p1-isa').value + '\n';
+            const p1DbAmount = parseFloat(document.getElementById('p1-db-amount').value) || 0;
+            if (p1DbAmount > 0) {
+                csv += '  DB Pension Name,' + escapeCSV(document.getElementById('p1-db-name').value || '') + '\n';
+                csv += '  DB Pension Amount,' + p1DbAmount + '\n';
+                csv += '  DB Pension Start Age,' + document.getElementById('p1-db-age').value + '\n';
+                const p1DbNormal = document.getElementById('p1-db-normal-age');
+                if (p1DbNormal) csv += '  DB Pension Normal Age,' + p1DbNormal.value + '\n';
+                const p1DbEarly = document.getElementById('p1-db-early-factor');
+                if (p1DbEarly) csv += '  DB Pension Early Factor,' + p1DbEarly.value + '%\n';
+                const p1DbLate = document.getElementById('p1-db-late-factor');
+                if (p1DbLate) csv += '  DB Pension Late Factor,' + p1DbLate.value + '%\n';
+                const p1DbCommute = document.getElementById('p1-db-commute');
+                if (p1DbCommute) csv += '  DB Pension Commutation,' + p1DbCommute.value + '%\n';
+                const p1DbFactor = document.getElementById('p1-db-commute-factor');
+                if (p1DbFactor) csv += '  DB Pension Commute Factor,' + p1DbFactor.value + '\n';
+            }
+
+            // Person 2 (always included - both people are always visible in UI)
+            const p2Element = document.getElementById('person2');
+            if (p2Element) {
+                csv += 'Person,' + escapeCSV(document.getElementById('p2-name').value) + '\n';
+                csv += '  Birth Date,' + document.getElementById('p2-birth').value + '\n';
+                csv += '  Retirement Age,' + document.getElementById('p2-retire').value + '\n';
+                csv += '  State Pension Age,' + document.getElementById('p2-spa').value + '\n';
+                csv += '  Pension Pot,' + document.getElementById('p2-pension').value + '\n';
+                csv += '  ISA Balance,' + document.getElementById('p2-isa').value + '\n';
+                const p2DbAmount = parseFloat(document.getElementById('p2-db-amount').value) || 0;
+                if (p2DbAmount > 0) {
+                    csv += '  DB Pension Name,' + escapeCSV(document.getElementById('p2-db-name').value || '') + '\n';
+                    csv += '  DB Pension Amount,' + p2DbAmount + '\n';
+                    csv += '  DB Pension Start Age,' + document.getElementById('p2-db-age').value + '\n';
+                    const p2DbNormal = document.getElementById('p2-db-normal-age');
+                    if (p2DbNormal) csv += '  DB Pension Normal Age,' + p2DbNormal.value + '\n';
+                    const p2DbEarly = document.getElementById('p2-db-early-factor');
+                    if (p2DbEarly) csv += '  DB Pension Early Factor,' + p2DbEarly.value + '%\n';
+                    const p2DbLate = document.getElementById('p2-db-late-factor');
+                    if (p2DbLate) csv += '  DB Pension Late Factor,' + p2DbLate.value + '%\n';
+                    const p2DbCommute = document.getElementById('p2-db-commute');
+                    if (p2DbCommute) csv += '  DB Pension Commutation,' + p2DbCommute.value + '%\n';
+                    const p2DbFactor = document.getElementById('p2-db-commute-factor');
+                    if (p2DbFactor) csv += '  DB Pension Commute Factor,' + p2DbFactor.value + '\n';
+                }
+            }
+
+            // Mortgage configuration
+            const mortgageParts = getMortgageParts();
+            const totalMortgageBalance = mortgageParts.reduce((sum, p) => sum + (p.principal || 0), 0);
+            if (totalMortgageBalance > 0) {
+                csv += '\nMORTGAGE CONFIGURATION\n';
+                csv += 'Early Payoff Year,' + document.getElementById('mortgage-early').value + '\n';
+                mortgageParts.forEach((part, i) => {
+                    csv += 'Part ' + (i+1) + ' Name,' + escapeCSV(part.name) + '\n';
+                    csv += 'Part ' + (i+1) + ' Principal,' + part.principal + '\n';
+                    csv += 'Part ' + (i+1) + ' Rate,' + (part.interest_rate * 100).toFixed(2) + '%\n';
+                    csv += 'Part ' + (i+1) + ' Type,' + (part.is_repayment ? 'Repayment' : 'Interest Only') + '\n';
+                    csv += 'Part ' + (i+1) + ' Start Year,' + part.start_year + '\n';
+                    csv += 'Part ' + (i+1) + ' Term,' + part.term_years + ' years\n';
+                });
+            }
+            csv += '\n';
 
             // Sort results based on optimization goal
-            const isDepletionMode = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
             const optimizationGoal = document.getElementById('optimization-goal').value;
             const sortedForExport = [...lastResults.results].sort((a, b) => {
                 if (isDepletionMode) {
@@ -5244,7 +5499,7 @@ const webUIHTML = `<!DOCTYPE html>
 
             // Add mode-specific parameters
             if (currentMode === 'depletion' || currentMode === 'pension-only' || currentMode === 'pension-to-isa') {
-                const targetAge = document.getElementById('target-depletion-age');
+                const targetAge = document.getElementById('depletion-age');
                 if (targetAge) filenameParts.push('age' + targetAge.value);
             }
             if (currentMode === 'fixed') {
@@ -5256,6 +5511,7 @@ const webUIHTML = `<!DOCTYPE html>
 
             filenameParts.push(timestamp);
             const filename = filenameParts.join('-') + '.csv';
+            console.log('downloadStrategyCSV: filename=' + filename + ', csv length=' + csv.length);
 
             fetch('/api/export-csv', {
                 method: 'POST',
@@ -5264,6 +5520,7 @@ const webUIHTML = `<!DOCTYPE html>
             })
             .then(res => res.json())
             .then(data => {
+                console.log('downloadStrategyCSV: response', data);
                 if (data.success) {
                     showExportNotification(data.file_path);
                 } else {
@@ -5271,8 +5528,13 @@ const webUIHTML = `<!DOCTYPE html>
                 }
             })
             .catch(err => {
+                console.error('downloadStrategyCSV: fetch error', err);
                 alert('Export failed: ' + err.message);
             });
+            } catch (e) {
+                console.error('downloadStrategyCSV: exception', e);
+                alert('CSV export error: ' + e.message);
+            }
         }
 
         // Show notification with file path and open folder button

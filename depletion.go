@@ -48,8 +48,28 @@ func CalculateDepletionIncome(params SimulationParams, config *Config) Depletion
 		balanceAtTarget := getBalanceAtYear(result, targetYear)
 
 		// Store best result so far (one with lowest absolute balance at target)
-		beforeAge := ic.IncomeRatioPhase1 * midMultiplier
-		afterAge := ic.IncomeRatioPhase2 * midMultiplier
+		// Calculate display values based on tiered vs legacy config
+		var beforeAge, afterAge float64
+		if ic.HasTiers() {
+			// For tiered config, get first and last tier values using multiplier
+			if len(ic.Tiers) > 0 {
+				firstTier := ic.Tiers[0]
+				if firstTier.Ratio > 0 {
+					beforeAge = firstTier.Ratio * midMultiplier
+				} else {
+					beforeAge = firstTier.MonthlyAmount
+				}
+				lastTier := ic.Tiers[len(ic.Tiers)-1]
+				if lastTier.Ratio > 0 {
+					afterAge = lastTier.Ratio * midMultiplier
+				} else {
+					afterAge = lastTier.MonthlyAmount
+				}
+			}
+		} else {
+			beforeAge = ic.IncomeRatioPhase1 * midMultiplier
+			afterAge = ic.IncomeRatioPhase2 * midMultiplier
+		}
 
 		currentResult := DepletionResult{
 			Params:                params,
@@ -98,11 +118,35 @@ func cloneConfigWithMultiplier(config *Config, multiplier float64) *Config {
 	newConfig.TaxBands = make([]TaxBand, len(config.TaxBands))
 	copy(newConfig.TaxBands, config.TaxBands)
 
-	// Calculate income based on ratios and multiplier
-	newConfig.IncomeRequirements.MonthlyBeforeAge =
-		config.IncomeRequirements.IncomeRatioPhase1 * multiplier
-	newConfig.IncomeRequirements.MonthlyAfterAge =
-		config.IncomeRequirements.IncomeRatioPhase2 * multiplier
+	// Handle tiered vs legacy income
+	if config.IncomeRequirements.HasTiers() {
+		// Deep copy tiers and convert ratios to absolute monthly amounts
+		newConfig.IncomeRequirements.Tiers = make([]IncomeTier, len(config.IncomeRequirements.Tiers))
+		for i, tier := range config.IncomeRequirements.Tiers {
+			newTier := tier
+			// If tier has a ratio, convert it to absolute monthly amount using multiplier
+			if tier.Ratio > 0 {
+				newTier.MonthlyAmount = tier.Ratio * multiplier
+				newTier.Ratio = 0 // Clear ratio since we've converted to absolute
+			}
+			// Copy pointer values
+			if tier.StartAge != nil {
+				startAge := *tier.StartAge
+				newTier.StartAge = &startAge
+			}
+			if tier.EndAge != nil {
+				endAge := *tier.EndAge
+				newTier.EndAge = &endAge
+			}
+			newConfig.IncomeRequirements.Tiers[i] = newTier
+		}
+	} else {
+		// Legacy: Calculate income based on ratios and multiplier
+		newConfig.IncomeRequirements.MonthlyBeforeAge =
+			config.IncomeRequirements.IncomeRatioPhase1 * multiplier
+		newConfig.IncomeRequirements.MonthlyAfterAge =
+			config.IncomeRequirements.IncomeRatioPhase2 * multiplier
+	}
 
 	// Enable growth decline if depletion growth decline is enabled
 	// This automatically sets up the standard growth decline mechanism using:
@@ -125,6 +169,12 @@ func cloneConfigWithMultiplier(config *Config, multiplier float64) *Config {
 
 	// Disable depletion mode in the cloned config to use fixed mode in simulation
 	newConfig.IncomeRequirements.TargetDepletionAge = 0
+
+	// Disable VPW and Guardrails which would override the multiplier-based income
+	// These features dynamically adjust withdrawals based on portfolio performance,
+	// which interferes with the binary search for sustainable income
+	newConfig.IncomeRequirements.VPWEnabled = false
+	newConfig.IncomeRequirements.GuardrailsEnabled = false
 
 	// Income inflation is now enabled in depletion mode for consistency with fixed income mode.
 	// Both modes apply the same income inflation rate to required income over time.
@@ -206,8 +256,8 @@ func FindBestDepletionStrategy(results []DepletionResult) int {
 	// First pass: find strategies that properly converge (balance close to zero at target)
 	convergedIndices := []int{}
 	for i, r := range results {
-		// Converged if balance is between -£5k (slight overshoot) and £50k (small undershoot)
-		if r.ConvergenceError >= -5000 && r.ConvergenceError <= 50000 {
+		// Converged if balance is between -£20k (up to 2 years overshoot) and £50k (small undershoot)
+		if r.ConvergenceError >= -20000 && r.ConvergenceError <= 50000 {
 			convergedIndices = append(convergedIndices, i)
 		}
 	}
@@ -362,8 +412,28 @@ func CalculatePensionOnlyDepletionIncome(params SimulationParams, config *Config
 		pensionBalanceAtTarget := getPensionBalanceAtYear(result, targetYear)
 
 		// Store best result so far
-		beforeAge := ic.IncomeRatioPhase1 * midMultiplier
-		afterAge := ic.IncomeRatioPhase2 * midMultiplier
+		// Calculate display values based on tiered vs legacy config
+		var beforeAge, afterAge float64
+		if ic.HasTiers() {
+			// For tiered config, get first and last tier values using multiplier
+			if len(ic.Tiers) > 0 {
+				firstTier := ic.Tiers[0]
+				if firstTier.Ratio > 0 {
+					beforeAge = firstTier.Ratio * midMultiplier
+				} else {
+					beforeAge = firstTier.MonthlyAmount
+				}
+				lastTier := ic.Tiers[len(ic.Tiers)-1]
+				if lastTier.Ratio > 0 {
+					afterAge = lastTier.Ratio * midMultiplier
+				} else {
+					afterAge = lastTier.MonthlyAmount
+				}
+			}
+		} else {
+			beforeAge = ic.IncomeRatioPhase1 * midMultiplier
+			afterAge = ic.IncomeRatioPhase2 * midMultiplier
+		}
 
 		currentResult := DepletionResult{
 			Params:                params,

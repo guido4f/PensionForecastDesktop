@@ -46,8 +46,12 @@ type PersonConfig struct {
 
 // FinancialConfig holds growth and inflation rates
 type FinancialConfig struct {
-	PensionGrowthRate        float64 `yaml:"pension_growth_rate" json:"pension_growth_rate"`
-	SavingsGrowthRate        float64 `yaml:"savings_growth_rate" json:"savings_growth_rate"`
+	// Growth Rate Source: "custom" for manual entry, or stock index ID (e.g., "sp500", "ftse100")
+	GrowthRateSource      string `yaml:"growth_rate_source,omitempty" json:"growth_rate_source,omitempty"`
+	GrowthRatePeriodYears int    `yaml:"growth_rate_period_years,omitempty" json:"growth_rate_period_years,omitempty"` // Selected time period (3, 5, 10, 25, etc.)
+
+	PensionGrowthRate float64 `yaml:"pension_growth_rate" json:"pension_growth_rate"`
+	SavingsGrowthRate float64 `yaml:"savings_growth_rate" json:"savings_growth_rate"`
 	IncomeInflationRate      float64 `yaml:"income_inflation_rate" json:"income_inflation_rate"`
 	StatePensionAmount       float64 `yaml:"state_pension_amount" json:"state_pension_amount"`
 	StatePensionInflation    float64 `yaml:"state_pension_inflation" json:"state_pension_inflation"`
