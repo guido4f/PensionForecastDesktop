@@ -44,9 +44,11 @@
 people:
     - name: James
       birth_date: "1971-07-15"
-      retirement_age: 55
+      retirement_date: "2026-02-07"
+      retirement_age: 0
+      pension_access_age: 55
       state_pension_age: 67
-      tax_free_savings: 110000
+      tax_free_savings: 114000
       pension: 900000
       isa_annual_limit: 20000
       db_pension_amount: 0
@@ -63,10 +65,12 @@ people:
       part_time_end_age: 60
     - name: Delphine
       birth_date: "1973-10-23"
-      retirement_age: 57
+      retirement_date: "2026-10-23"
+      retirement_age: 0
+      pension_access_age: 57
       state_pension_age: 67
-      tax_free_savings: 300000
-      pension: 100000
+      tax_free_savings: 290000
+      pension: 80000
       isa_annual_limit: 20000
       db_pension_amount: 5000
       db_pension_start_age: 57
@@ -81,8 +85,8 @@ people:
       part_time_start_age: 55
       part_time_end_age: 60
 financial:
-    pension_growth_rate: 0.06
-    savings_growth_rate: 0.06
+    pension_growth_rate: 0.05
+    savings_growth_rate: 0.05
     income_inflation_rate: 0.03
     state_pension_amount: 12570
     state_pension_inflation: 0.03
@@ -95,14 +99,12 @@ financial:
     savings_growth_end_rate: 0.04
     growth_decline_target_age: 80
     growth_decline_reference_person: ""
-    depletion_growth_decline_enabled: true
+    depletion_growth_decline_enabled: false
     depletion_growth_decline_percent: 0.03
 income_requirements:
-    monthly_before_age: 5000
-    monthly_after_age: 4000
-    target_depletion_age: 0
-    income_ratio_phase1: 0
-    income_ratio_phase2: 0
+    target_depletion_age: 90
+    income_ratio_phase1: 5
+    income_ratio_phase2: 3
     guardrails_enabled: false
     guardrails_upper_limit: 1.2
     guardrails_lower_limit: 0.8
@@ -120,14 +122,8 @@ mortgage:
           is_repayment: false
           term_years: 25
           start_year: 2006
-        - name: Boat
-          principal: 45000
-          interest_rate: 0.0369
-          is_repayment: true
-          term_years: 6
-          start_year: 2021
     end_year: 2031
-    early_payoff_year: 2029
+    early_payoff_year: 2028
 simulation:
     start_year: 2026
     end_age: 100
