@@ -84,15 +84,19 @@
 people:
   - name: "Person1"
     birth_date: "1970-12-15"       # YYYY-MM-DD format
-    retirement_age: 55             # Age when pension can be accessed
+    retirement_date: "2026-07-15"  # Date when you stop working (YYYY-MM-DD) - determines which tax year
+    pension_access_age: 55         # Age when DC pension can be accessed (UK minimum: 55, rising to 57)
     state_pension_age: 67          # Age when state pension starts
     tax_free_savings: 100000.00    # ISA/savings balance (£)
     pension: 500000.00             # Pension pot value (£)
     isa_annual_limit: 20000.00     # Max annual ISA contribution (£)
+    # Note: If retirement_date is in July 2026, income requirements start in tax year 2026/27
+    # If you retire in February 2026, that's tax year 2025/26
 
   - name: "Person2"
     birth_date: "1975-01-13"
-    retirement_age: 57
+    retirement_date: "2032-06-01"  # Date when you stop working
+    pension_access_age: 57         # Age when DC pension can be accessed
     state_pension_age: 67
     tax_free_savings: 100000.00
     pension: 500000.00

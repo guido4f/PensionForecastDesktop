@@ -537,20 +537,37 @@ func promptForModeInitial(config *Config, configMissing bool) string {
 	} else {
 		fmt.Println("Select simulation mode:")
 		fmt.Println()
-		fmt.Println("  Fixed Income Mode (uses monthly_before_age / monthly_after_age):")
-		fmt.Printf("    1) Console output      - £%.0f/month before, £%.0f/month after age %d\n",
-			config.IncomeRequirements.MonthlyBeforeAge,
-			config.IncomeRequirements.MonthlyAfterAge,
-			config.IncomeRequirements.AgeThreshold)
+		// Calculate initial portfolio for percentage display
+		initialPortfolio := 0.0
+		for _, p := range config.People {
+			initialPortfolio += p.Pension + p.TaxFreeSavings
+		}
+
+		if config.IncomeRequirements.HasTiers() {
+			tierDesc := config.IncomeRequirements.DescribeTiers(initialPortfolio)
+			fmt.Println("  Fixed Income Mode (tiered income):")
+			fmt.Printf("    1) Console output      - %s\n", tierDesc)
+		} else {
+			fmt.Println("  Fixed Income Mode (uses monthly_before_age / monthly_after_age):")
+			fmt.Printf("    1) Console output      - £%.0f/month before, £%.0f/month after age %d\n",
+				config.IncomeRequirements.MonthlyBeforeAge,
+				config.IncomeRequirements.MonthlyAfterAge,
+				config.IncomeRequirements.AgeThreshold)
+		}
 		fmt.Println("    2) HTML reports        - Generate interactive browser reports")
 		fmt.Println("    3) Sensitivity         - Analyze across growth rate combinations")
 		fmt.Println()
 
 		if config.IncomeRequirements.TargetDepletionAge > 0 {
-			fmt.Printf("  Depletion Mode (deplete by age %d, ratio %.0f:%.0f):\n",
-				config.IncomeRequirements.TargetDepletionAge,
-				config.IncomeRequirements.IncomeRatioPhase1,
-				config.IncomeRequirements.IncomeRatioPhase2)
+			if config.IncomeRequirements.HasTiers() {
+				fmt.Printf("  Depletion Mode (deplete by age %d, tiered ratios):\n",
+					config.IncomeRequirements.TargetDepletionAge)
+			} else {
+				fmt.Printf("  Depletion Mode (deplete by age %d, ratio %.0f:%.0f):\n",
+					config.IncomeRequirements.TargetDepletionAge,
+					config.IncomeRequirements.IncomeRatioPhase1,
+					config.IncomeRequirements.IncomeRatioPhase2)
+			}
 			fmt.Println("    4) Console output      - Calculate sustainable income (all strategies)")
 			fmt.Println("    5) HTML reports        - Generate interactive browser reports")
 			fmt.Println("    6) Sensitivity         - Analyze across growth rate combinations")
@@ -634,12 +651,13 @@ func promptForMissingDepletionFields(config *Config, missing []string, configFil
 			if len(config.People) == 0 {
 				fmt.Println("─── Person 1 (Primary) ───")
 				person := PersonConfig{
-					Name:            promptStringSimple(reader, "  Name", "Person1"),
-					BirthDate:       promptStringSimple(reader, "  Birth date (YYYY-MM-DD)", "1975-01-15"),
-					RetirementAge:   promptIntSimple(reader, "  Retirement age", 55),
-					StatePensionAge: promptIntSimple(reader, "  State pension age", 67),
-					Pension:         promptMoneySimple(reader, "  Pension pot value", 500000),
-					TaxFreeSavings:  promptMoneySimple(reader, "  ISA/savings balance", 100000),
+					Name:             promptStringSimple(reader, "  Name", "Person1"),
+					BirthDate:        promptStringSimple(reader, "  Birth date (YYYY-MM-DD)", "1975-01-15"),
+					RetirementAge:    promptIntSimple(reader, "  Stop work age (income starts)", 55),
+					PensionAccessAge: promptIntSimple(reader, "  Pension access age (DC pension)", 55),
+					StatePensionAge:  promptIntSimple(reader, "  State pension age", 67),
+					Pension:          promptMoneySimple(reader, "  Pension pot value", 500000),
+					TaxFreeSavings:   promptMoneySimple(reader, "  ISA/savings balance", 100000),
 				}
 				config.People = append(config.People, person)
 				config.IncomeRequirements.ReferencePerson = person.Name

@@ -17,13 +17,15 @@ var defaultConfigYAML string
 
 // PersonConfig represents a person's configuration from YAML
 type PersonConfig struct {
-	Name            string  `yaml:"name" json:"name"`
-	BirthDate       string  `yaml:"birth_date" json:"birth_date"`
-	RetirementAge   int     `yaml:"retirement_age" json:"retirement_age"`
-	StatePensionAge int     `yaml:"state_pension_age" json:"state_pension_age"`
-	TaxFreeSavings  float64 `yaml:"tax_free_savings" json:"tax_free_savings"`
-	Pension         float64 `yaml:"pension" json:"pension"`
-	ISAAnnualLimit  float64 `yaml:"isa_annual_limit" json:"isa_annual_limit"` // Per-person ISA annual limit (default 20000)
+	Name             string  `yaml:"name" json:"name"`
+	BirthDate        string  `yaml:"birth_date" json:"birth_date"`
+	RetirementDate   string  `yaml:"retirement_date" json:"retirement_date"`       // Date when you stop working (YYYY-MM-DD) - preferred over retirement_age
+	RetirementAge    int     `yaml:"retirement_age" json:"retirement_age"`         // Age when income requirements start (legacy, use retirement_date instead)
+	PensionAccessAge int     `yaml:"pension_access_age" json:"pension_access_age"` // Age when DC pension can be accessed (default: same as retirement_age)
+	StatePensionAge  int     `yaml:"state_pension_age" json:"state_pension_age"`
+	TaxFreeSavings   float64 `yaml:"tax_free_savings" json:"tax_free_savings"`
+	Pension          float64 `yaml:"pension" json:"pension"`
+	ISAAnnualLimit   float64 `yaml:"isa_annual_limit" json:"isa_annual_limit"` // Per-person ISA annual limit (default 20000)
 
 	// DB Pension Configuration
 	DBPensionAmount        float64 `yaml:"db_pension_amount" json:"db_pension_amount"`                 // Annual DB pension at normal retirement age
@@ -564,6 +566,14 @@ func GetDefaultValue(fieldPath string, defaultConfig *Config) string {
 		if len(defaultConfig.People) > 0 {
 			return strconv.Itoa(defaultConfig.People[0].RetirementAge)
 		}
+	case "person.pension_access_age":
+		if len(defaultConfig.People) > 0 {
+			age := defaultConfig.People[0].PensionAccessAge
+			if age <= 0 {
+				age = defaultConfig.People[0].RetirementAge
+			}
+			return strconv.Itoa(age)
+		}
 	case "person.state_pension_age":
 		if len(defaultConfig.People) > 0 {
 			return strconv.Itoa(defaultConfig.People[0].StatePensionAge)
@@ -589,6 +599,14 @@ func GetDefaultValue(fieldPath string, defaultConfig *Config) string {
 	case "person2.retirement_age":
 		if len(defaultConfig.People) > 1 {
 			return strconv.Itoa(defaultConfig.People[1].RetirementAge)
+		}
+	case "person2.pension_access_age":
+		if len(defaultConfig.People) > 1 {
+			age := defaultConfig.People[1].PensionAccessAge
+			if age <= 0 {
+				age = defaultConfig.People[1].RetirementAge
+			}
+			return strconv.Itoa(age)
 		}
 	case "person2.state_pension_age":
 		if len(defaultConfig.People) > 1 {
@@ -705,6 +723,66 @@ func GetBirthYear(birthDate string) int {
 		return 0
 	}
 	return t.Year()
+}
+
+// GetRetirementTaxYear returns the tax year (start year) when retirement begins
+// based on a retirement date (YYYY-MM-DD format)
+// The tax year runs April 6 to April 5, so a retirement date of July 2026
+// falls in tax year 2026/27 (returns 2026)
+func GetRetirementTaxYear(retirementDate string) int {
+	t, err := time.Parse("2006-01-02", retirementDate)
+	if err != nil {
+		return 0
+	}
+
+	year := t.Year()
+	month := int(t.Month())
+	day := t.Day()
+
+	// If retirement is before April 6, it's in the previous tax year
+	if month < 4 || (month == 4 && day < 6) {
+		return year - 1
+	}
+
+	return year
+}
+
+// GetEffectiveRetirementAge calculates the age at retirement date
+// Returns the age they will be when they retire
+func GetEffectiveRetirementAge(birthDate, retirementDate string) int {
+	birth, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		return 0
+	}
+
+	retire, err := time.Parse("2006-01-02", retirementDate)
+	if err != nil {
+		return 0
+	}
+
+	age := retire.Year() - birth.Year()
+	// Adjust if birthday hasn't occurred yet in retirement year
+	if retire.Month() < birth.Month() ||
+		(retire.Month() == birth.Month() && retire.Day() < birth.Day()) {
+		age--
+	}
+
+	return age
+}
+
+// GetRetirementInfo returns both the tax year and age for a person's retirement
+// If retirementDate is set, it takes precedence over retirementAge
+// Returns (taxYear, age)
+func (p *PersonConfig) GetRetirementInfo() (int, int) {
+	if p.RetirementDate != "" {
+		taxYear := GetRetirementTaxYear(p.RetirementDate)
+		age := GetEffectiveRetirementAge(p.BirthDate, p.RetirementDate)
+		return taxYear, age
+	}
+
+	// Fall back to age-based calculation
+	taxYear := GetTaxYearForAge(p.BirthDate, p.RetirementAge)
+	return taxYear, p.RetirementAge
 }
 
 // FindPerson finds a person by name in the config

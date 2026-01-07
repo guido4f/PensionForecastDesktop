@@ -41,8 +41,17 @@ func PrintHeader(config *Config) {
 
 	for _, p := range config.People {
 		birthYear := GetBirthYear(p.BirthDate)
-		fmt.Printf("  %s: Born %d, Retire at %d, State Pension at %d\n",
-			p.Name, birthYear, p.RetirementAge, p.StatePensionAge)
+		pensionAccessAge := p.PensionAccessAge
+		if pensionAccessAge <= 0 {
+			pensionAccessAge = p.RetirementAge
+		}
+		if pensionAccessAge != p.RetirementAge {
+			fmt.Printf("  %s: Born %d, Stop work at %d, Pension access at %d, State Pension at %d\n",
+				p.Name, birthYear, p.RetirementAge, pensionAccessAge, p.StatePensionAge)
+		} else {
+			fmt.Printf("  %s: Born %d, Retire at %d, State Pension at %d\n",
+				p.Name, birthYear, p.RetirementAge, p.StatePensionAge)
+		}
 		fmt.Printf("          ISA: %s, Pension: %s\n",
 			FormatMoney(p.TaxFreeSavings), FormatMoney(p.Pension))
 		if p.DBPensionAmount > 0 {
@@ -57,11 +66,22 @@ func PrintHeader(config *Config) {
 		config.Financial.SavingsGrowthRate*100,
 		config.Financial.IncomeInflationRate*100,
 		config.Financial.TaxBandInflation*100)
-	fmt.Printf("  Income Need: £%.0f/month (before %d), £%.0f/month (after %d) [after tax]\n",
-		config.IncomeRequirements.MonthlyBeforeAge,
-		config.IncomeRequirements.AgeThreshold,
-		config.IncomeRequirements.MonthlyAfterAge,
-		config.IncomeRequirements.AgeThreshold)
+	// Display income requirements (tiered or legacy)
+	if config.IncomeRequirements.HasTiers() {
+		// Calculate initial portfolio for percentage display
+		initialPortfolio := 0.0
+		for _, p := range config.People {
+			initialPortfolio += p.Pension + p.TaxFreeSavings
+		}
+		tierDesc := config.IncomeRequirements.DescribeTiers(initialPortfolio)
+		fmt.Printf("  Income Tiers: %s [after tax]\n", tierDesc)
+	} else {
+		fmt.Printf("  Income Need: £%.0f/month (before %d), £%.0f/month (after %d) [after tax]\n",
+			config.IncomeRequirements.MonthlyBeforeAge,
+			config.IncomeRequirements.AgeThreshold,
+			config.IncomeRequirements.MonthlyAfterAge,
+			config.IncomeRequirements.AgeThreshold)
+	}
 	// Show mortgage details
 	totalPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear)
 	annualPayment := config.GetTotalAnnualPayment()
@@ -77,8 +97,8 @@ func PrintHeader(config *Config) {
 				part.Name, part.Principal/1000, part.InterestRate*100, typeStr)
 		}
 	}
-	fmt.Printf("  Simulation: %d to %s at age %d\n",
-		config.Simulation.StartYear,
+	fmt.Printf("  Simulation: Tax year %s to %s at age %d\n",
+		TaxYearLabel(config.Simulation.StartYear),
 		config.Simulation.ReferencePerson,
 		config.Simulation.EndAge)
 	fmt.Println()
@@ -99,14 +119,14 @@ func PrintResultSummary(result SimulationResult, config *Config) {
 	}
 
 	// Print year-by-year table
-	fmt.Printf("%-6s", "Year")
+	fmt.Printf("%-8s", "Tax Year")
 	for _, name := range names {
 		fmt.Printf(" %s Age", name[:1])
 	}
 	fmt.Printf(" │ %10s %10s │ %10s %10s │ %10s │ %10s │ %12s\n",
 		"Required", "StatePen", "TaxFree", "Taxable", "Tax Paid", "Net Income", "Balance")
 
-	fmt.Println(strings.Repeat("─", 115))
+	fmt.Println(strings.Repeat("─", 117))
 
 	// Print every 5th year and key milestone years
 	for i, year := range result.Years {
@@ -115,7 +135,7 @@ func PrintResultSummary(result SimulationResult, config *Config) {
 			year.Year == config.Mortgage.EndYear
 
 		if isKeyYear {
-			fmt.Printf("%-6d", year.Year)
+			fmt.Printf("%-8s", year.TaxYearLabel)
 			for _, name := range names {
 				fmt.Printf(" %7d", year.Ages[name])
 			}
@@ -143,7 +163,7 @@ func PrintResultSummary(result SimulationResult, config *Config) {
 	fmt.Printf("  Total Withdrawn:   %s\n", FormatMoney(result.TotalWithdrawn))
 
 	if result.RanOutOfMoney {
-		fmt.Printf("  ⚠️  WARNING: Ran out of money in year %d\n", result.RanOutYear)
+		fmt.Printf("  ⚠️  WARNING: Ran out of money in tax year %s\n", TaxYearLabel(result.RanOutYear))
 	}
 
 	// Final balances

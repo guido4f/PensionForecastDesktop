@@ -385,12 +385,16 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
                 <div>
                     <h3>People</h3>
                     <table>
-                        <tr><th>Name</th><th>Birth Year</th><th>Retire Age</th><th>State Pension Age</th><th>ISA</th><th>Pension</th></tr>
+                        <tr><th>Name</th><th>Birth Year</th><th>Stop Work</th><th>Pension Access</th><th>State Pension</th><th>ISA</th><th>Pension</th></tr>
 `)
 	for _, p := range config.People {
 		birthYear := GetBirthYear(p.BirthDate)
-		fmt.Fprintf(f, "                        <tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
-			p.Name, birthYear, p.RetirementAge, p.StatePensionAge,
+		pensionAccessAge := p.PensionAccessAge
+		if pensionAccessAge <= 0 {
+			pensionAccessAge = p.RetirementAge
+		}
+		fmt.Fprintf(f, "                        <tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
+			p.Name, birthYear, p.RetirementAge, pensionAccessAge, p.StatePensionAge,
 			FormatMoney(p.TaxFreeSavings), FormatMoney(p.Pension))
 	}
 	fmt.Fprintf(f, `                    </table>
@@ -402,8 +406,8 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
                         <tr><td>Savings Growth Rate</td><td>%.0f%%</td></tr>
                         <tr><td>Income Inflation</td><td>%.0f%%</td></tr>
                         %s
-                        <tr><td>Mortgage (until %d)</td><td>%s/year</td></tr>
-                        <tr><td>Simulation Period</td><td>%d to age %d</td></tr>
+                        <tr><td>Mortgage (until %s)</td><td>%s/year</td></tr>
+                        <tr><td>Simulation Period</td><td>Tax year %s to age %d</td></tr>
                         %s
                     </table>
                 </div>
@@ -411,8 +415,8 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
         </div>
 `, config.Financial.PensionGrowthRate*100, config.Financial.SavingsGrowthRate*100, config.Financial.IncomeInflationRate*100,
 		getIncomeRequirementsHTML(config),
-		config.Mortgage.EndYear, FormatMoney(config.GetTotalAnnualPayment()),
-		config.Simulation.StartYear, config.Simulation.EndAge,
+		TaxYearLabel(config.Mortgage.EndYear), FormatMoney(config.GetTotalAnnualPayment()),
+		TaxYearLabel(config.Simulation.StartYear), config.Simulation.EndAge,
 		getGrowthDeclineHTML(config))
 
 	// Mortgage details (if any mortgage parts exist)
@@ -430,17 +434,17 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 			}
 			endYear := part.StartYear + part.TermYears
 			annualPayment := part.CalculateAnnualPayment()
-			fmt.Fprintf(f, "                <tr><td>%s</td><td>%s</td><td>%.1f%%</td><td>%s</td><td>%s</td><td>%d</td></tr>\n",
-				part.Name, FormatMoney(part.Principal), part.InterestRate*100, mortgageType, FormatMoney(annualPayment), endYear)
+			fmt.Fprintf(f, "                <tr><td>%s</td><td>%s</td><td>%.1f%%</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
+				part.Name, FormatMoney(part.Principal), part.InterestRate*100, mortgageType, FormatMoney(annualPayment), TaxYearLabel(endYear))
 		}
 		fmt.Fprintf(f, `            </table>
             <p style="margin-top: 0.5rem; color: var(--text-muted);">
                 <strong>Total Annual Payment:</strong> %s |
-                <strong>Normal End Year:</strong> %d |
-                <strong>Early Payoff Year:</strong> %d
+                <strong>Normal End Tax Year:</strong> %s |
+                <strong>Early Payoff Tax Year:</strong> %s
             </p>
         </div>
-`, FormatMoney(config.GetTotalAnnualPayment()), config.Mortgage.EndYear, config.Mortgage.EarlyPayoffYear)
+`, FormatMoney(config.GetTotalAnnualPayment()), TaxYearLabel(config.Mortgage.EndYear), TaxYearLabel(config.Mortgage.EarlyPayoffYear))
 	}
 
 	// Final balances breakdown
@@ -465,11 +469,11 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 	// Year-by-year table
 	fmt.Fprintf(f, `
         <div class="card">
-            <h2>Year-by-Year Breakdown</h2>
+            <h2>Tax Year-by-Year Breakdown</h2>
             <div style="overflow-x: auto;">
                 <table>
                     <tr>
-                        <th>Year</th>
+                        <th>Tax Year</th>
 `)
 	for _, name := range names {
 		fmt.Fprintf(f, "                        <th>%s Age</th>\n", name)
@@ -508,7 +512,7 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 		// Main row (clickable)
 		fmt.Fprintf(f, `                    <tr id="row-%d" class="expandable-row%s" onclick="toggleYear(%d)">
 `, year.Year, highlightClass, year.Year)
-		fmt.Fprintf(f, "                        <td>%d</td>\n", year.Year)
+		fmt.Fprintf(f, "                        <td>%s</td>\n", year.TaxYearLabel)
 		for _, name := range names {
 			fmt.Fprintf(f, "                        <td>%d</td>\n", year.Ages[name])
 		}
@@ -939,12 +943,16 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
                     <div>
                         <h3>People</h3>
                         <table>
-                            <tr><th>Name</th><th>Birth</th><th>Retire</th><th>State Pen</th><th>ISA</th><th>Pension</th></tr>
+                            <tr><th>Name</th><th>Birth</th><th>Stop Work</th><th>Pension</th><th>State Pen</th><th>ISA</th><th>Pension</th></tr>
 `)
 	for _, p := range config.People {
 		birthYear := GetBirthYear(p.BirthDate)
-		fmt.Fprintf(f, "                            <tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
-			p.Name, birthYear, p.RetirementAge, p.StatePensionAge,
+		pensionAccessAge := p.PensionAccessAge
+		if pensionAccessAge <= 0 {
+			pensionAccessAge = p.RetirementAge
+		}
+		fmt.Fprintf(f, "                            <tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%s</td><td>%s</td></tr>\n",
+			p.Name, birthYear, p.RetirementAge, pensionAccessAge, p.StatePensionAge,
 			FormatMoney(p.TaxFreeSavings), FormatMoney(p.Pension))
 	}
 	fmt.Fprintf(f, `                        </table>
@@ -1112,7 +1120,7 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
 			// Main row (clickable)
 			fmt.Fprintf(f, `                        <tr id="row-%s" class="expandable-row%s" onclick="toggleYear('%s')">
 `, rowID, highlightClass, rowID)
-			fmt.Fprintf(f, "                            <td>%d</td>\n", year.Year)
+			fmt.Fprintf(f, "                            <td>%s</td>\n", year.TaxYearLabel)
 			for _, name := range names {
 				fmt.Fprintf(f, "                            <td>%d</td>\n", year.Ages[name])
 			}
@@ -1538,8 +1546,8 @@ func writeDrawdownDetailsHTML(f *os.File, result SimulationResult, config *Confi
 		fmt.Fprintf(f, `
             <div style="margin-bottom: 1.5rem; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;">
                 <div style="background: var(--primary); color: white; padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center;">
-                    <strong>Year %d</strong>
-                    <span>`, year.Year)
+                    <strong>Tax Year %s</strong>
+                    <span>`, year.TaxYearLabel)
 
 		for _, name := range names {
 			fmt.Fprintf(f, "%s: %d  ", name, year.Ages[name])
@@ -2150,7 +2158,7 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
 			// Main row (clickable)
 			fmt.Fprintf(f, `                            <tr id="row-%s" class="expandable-row%s" onclick="toggleYear('%s')">
 `, rowID, highlightClass, rowID)
-			fmt.Fprintf(f, "                                <td>%d</td>\n", year.Year)
+			fmt.Fprintf(f, "                                <td>%s</td>\n", year.TaxYearLabel)
 			for _, name := range names {
 				fmt.Fprintf(f, "                                <td>%d</td>\n", year.Ages[name])
 			}

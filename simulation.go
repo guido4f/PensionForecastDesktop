@@ -18,10 +18,24 @@ func InitializePeople(config *Config) []*Person {
 		if deferralRate <= 0 {
 			deferralRate = 0.058 // UK default is 5.8% per year
 		}
+
+		// Calculate retirement tax year and age from retirement date or age
+		retirementTaxYear, retirementAge := pc.GetRetirementInfo()
+
+		// Use PensionAccessAge if set, otherwise default to RetirementAge
+		pensionAccessAge := pc.PensionAccessAge
+		if pensionAccessAge <= 0 {
+			pensionAccessAge = retirementAge
+		}
+
 		people[i] = &Person{
 			Name:              pc.Name,
 			BirthYear:         GetBirthYear(pc.BirthDate),
-			RetirementAge:     pc.RetirementAge,
+			BirthDate:         pc.BirthDate, // Store full date for tax year age calculations
+			RetirementDate:    pc.RetirementDate,
+			RetirementAge:     retirementAge,
+			RetirementTaxYear: retirementTaxYear,
+			PensionAccessAge:  pensionAccessAge,
 			StatePensionAge:   pc.StatePensionAge,
 			TaxFreeSavings:    pc.TaxFreeSavings,
 			UncrystallisedPot: pc.Pension,
@@ -157,18 +171,28 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		}
 		state.StartBalance = currentPortfolio
 
-		// Calculate ages
+		// Calculate ages (using tax year age calculation)
 		for _, p := range people {
-			state.Ages[p.Name] = year - p.BirthYear
+			if p.BirthDate != "" {
+				state.Ages[p.Name] = GetAgeInTaxYear(p.BirthDate, year)
+			} else {
+				state.Ages[p.Name] = year - p.BirthYear
+			}
 		}
 
 		// Calculate required income (with inflation)
 		// Income is only required once the reference person has retired
 		refPerson := GetReferencePerson(people, refPersonName)
-		refAge := year - refPerson.BirthYear
+		var refAge int
+		if refPerson.BirthDate != "" {
+			refAge = GetAgeInTaxYear(refPerson.BirthDate, year)
+		} else {
+			refAge = year - refPerson.BirthYear
+		}
 
 		// Calculate years since retirement for inflation (not years since simulation start)
-		retirementYear := refPerson.BirthYear + refPerson.RetirementAge
+		// Use RetirementTaxYear which is calculated from RetirementDate or RetirementAge
+		retirementYear := refPerson.RetirementTaxYear
 		yearsFromRetirement := year - retirementYear
 		if yearsFromRetirement < 0 {
 			yearsFromRetirement = 0
@@ -333,7 +357,12 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 			if p.ReceivesStatePension(year) {
 				// Calculate years since this person started receiving state pension
 				// Use effective start age which includes deferral
-				effectiveStartYear := p.BirthYear + p.EffectiveStatePensionAge()
+				var effectiveStartYear int
+				if p.BirthDate != "" {
+					effectiveStartYear = GetTaxYearForAge(p.BirthDate, p.EffectiveStatePensionAge())
+				} else {
+					effectiveStartYear = p.BirthYear + p.EffectiveStatePensionAge()
+				}
 				yearsSinceStart := year - effectiveStartYear
 				if yearsSinceStart < 0 {
 					yearsSinceStart = 0
@@ -352,7 +381,12 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		for _, p := range people {
 			if p.ReceivesDBPension(year) {
 				// Handle DB pension lump sum (commutation) on first year
-				startYear := p.BirthYear + p.DBPensionStartAge
+				var startYear int
+				if p.BirthDate != "" {
+					startYear = GetTaxYearForAge(p.BirthDate, p.DBPensionStartAge)
+				} else {
+					startYear = p.BirthYear + p.DBPensionStartAge
+				}
 				if year == startYear && !p.DBPensionLumpSumTaken && p.DBPensionCommutation > 0 {
 					lumpSum := p.GetDBPensionLumpSum()
 					if lumpSum > 0 {

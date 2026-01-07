@@ -22,6 +22,47 @@ func FormatMoneyPDF(amount float64) string {
 	return pdfText(formatWithCommas(amount))
 }
 
+// getPensionAccessMonth returns the first month (0-11) in the tax year when pension becomes accessible.
+// Returns -1 if pension is not accessible during this tax year.
+// Returns 0 if pension was already accessible before this tax year started.
+// Tax year months: Apr=0, May=1, Jun=2, Jul=3, Aug=4, Sep=5, Oct=6, Nov=7, Dec=8, Jan=9, Feb=10, Mar=11
+func getPensionAccessMonth(birthDate string, pensionAccessAge int, taxYear int) int {
+	t, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		return 0 // Default to accessible if can't parse
+	}
+
+	birthYear := t.Year()
+	birthMonth := int(t.Month())
+	birthDay := t.Day()
+
+	// Year when they turn pensionAccessAge
+	accessYear := birthYear + pensionAccessAge
+
+	// Tax year runs Apr 6 of taxYear to Apr 5 of taxYear+1
+	// Check if they gain access before this tax year
+	if accessYear < taxYear || (accessYear == taxYear && (birthMonth < 4 || (birthMonth == 4 && birthDay < 6))) {
+		return 0 // Already had access before tax year started
+	}
+
+	// Check if they gain access after this tax year
+	if accessYear > taxYear+1 || (accessYear == taxYear+1 && (birthMonth > 4 || (birthMonth == 4 && birthDay >= 6))) {
+		return -1 // Not accessible during this tax year
+	}
+
+	// They gain access during this tax year - calculate which month
+	// Tax year month mapping: Apr=0, May=1, ..., Dec=8, Jan=9, Feb=10, Mar=11
+	if accessYear == taxYear {
+		// Birthday is Apr-Dec of taxYear
+		// Apr=0, May=1, Jun=2, Jul=3, Aug=4, Sep=5, Oct=6, Nov=7, Dec=8
+		return birthMonth - 4
+	} else {
+		// Birthday is Jan-Mar of taxYear+1
+		// Jan=9, Feb=10, Mar=11
+		return birthMonth + 8
+	}
+}
+
 // getGrowthDeclineText returns a text description of growth decline, or empty string if not enabled
 func getGrowthDeclineText(config *Config) string {
 	// Helper to extract birth year from date string (YYYY-MM-DD)
@@ -223,8 +264,18 @@ func (r *PDFActionPlanReport) addTitlePage() {
 	r.pdf.SetTextColor(50, 50, 50)
 	for _, person := range r.config.People {
 		birthYear := GetBirthYear(person.BirthDate)
-		text := fmt.Sprintf("%s - Born %d, Pension Access Age %d, State Pension Age %d",
-			person.Name, birthYear, person.RetirementAge, person.StatePensionAge)
+		pensionAccessAge := person.PensionAccessAge
+		if pensionAccessAge <= 0 {
+			pensionAccessAge = person.RetirementAge
+		}
+		var text string
+		if pensionAccessAge != person.RetirementAge {
+			text = fmt.Sprintf("%s - Born %d, Stop Work %d, Pension Access %d, State Pension %d",
+				person.Name, birthYear, person.RetirementAge, pensionAccessAge, person.StatePensionAge)
+		} else {
+			text = fmt.Sprintf("%s - Born %d, Pension Access Age %d, State Pension Age %d",
+				person.Name, birthYear, pensionAccessAge, person.StatePensionAge)
+		}
 		r.pdf.CellFormat(contentWidth, 7, text, "LR", 1, "C", true, 0, "")
 	}
 	r.pdf.CellFormat(contentWidth, 1, "", "LRB", 1, "C", true, 0, "")
@@ -255,16 +306,16 @@ func (r *PDFActionPlanReport) addTitlePage() {
 	// ISA depletion
 	isaText := "ISA Depleted: Never"
 	if isaDepletedYear > 0 {
-		isaAge := isaDepletedYear - refBirthYear
-		isaText = fmt.Sprintf("ISA Depleted: %d (Age %d)", isaDepletedYear, isaAge)
+		isaAge := GetAgeInTaxYear(refPerson.BirthDate, isaDepletedYear)
+		isaText = fmt.Sprintf("ISA Depleted: Tax Year %s (Age %d)", TaxYearLabel(isaDepletedYear), isaAge)
 	}
 	r.pdf.CellFormat(contentWidth, 7, isaText, "LR", 1, "C", true, 0, "")
 
 	// Pension depletion
 	pensionText := "Pension Depleted: Never"
 	if pensionDepletedYear > 0 {
-		pensionAge := pensionDepletedYear - refBirthYear
-		pensionText = fmt.Sprintf("Pension Depleted: %d (Age %d)", pensionDepletedYear, pensionAge)
+		pensionAge := GetAgeInTaxYear(refPerson.BirthDate, pensionDepletedYear)
+		pensionText = fmt.Sprintf("Pension Depleted: Tax Year %s (Age %d)", TaxYearLabel(pensionDepletedYear), pensionAge)
 	}
 	r.pdf.CellFormat(contentWidth, 7, pensionText, "LRB", 1, "C", true, 0, "")
 
@@ -304,7 +355,8 @@ func (r *PDFActionPlanReport) addTitlePage() {
 			"LR", 1, "C", true, 0, "")
 
 		// Mortgage end information
-		mortgageEndText := fmt.Sprintf("Mortgage ends: %d (Age %d)", mortgageEndYear, mortgageEndYear-refBirthYear)
+		mortgageAge := GetAgeInTaxYear(refPerson.BirthDate, mortgageEndYear)
+		mortgageEndText := fmt.Sprintf("Mortgage ends: Tax Year %s (Age %d)", TaxYearLabel(mortgageEndYear), mortgageAge)
 		r.pdf.CellFormat(contentWidth, 7, mortgageEndText, "LRB", 1, "C", true, 0, "")
 	}
 
@@ -907,10 +959,87 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 		totalISADeposit += amount
 	}
 
-	// Calculate monthly breakdown
-	monthlyISA := totalISAWithdrawal / 12
-	monthlyPensionTaxFree := totalPensionTaxFree / 12
-	monthlyPensionTaxable := totalPensionTaxable / 12
+	// Calculate first month when any person can access pension
+	// This determines when pension withdrawals can actually start
+	firstPensionMonth := -1 // -1 means no pension access this year
+	for _, person := range r.config.People {
+		accessMonth := getPensionAccessMonth(person.BirthDate, person.PensionAccessAge, yearState.Year)
+		if accessMonth >= 0 {
+			if firstPensionMonth < 0 || accessMonth < firstPensionMonth {
+				firstPensionMonth = accessMonth
+			}
+		}
+	}
+
+	// If no pension access this year, show all pension columns as 0
+	// If pension access starts mid-year, redistribute withdrawals
+	pensionMonths := 12 // Number of months pension is accessible
+	if firstPensionMonth < 0 {
+		pensionMonths = 0
+	} else if firstPensionMonth > 0 {
+		pensionMonths = 12 - firstPensionMonth
+	}
+
+	// Calculate monthly breakdown based on pension access timing
+	// The key insight: in pre-pension months, ALL income must come from ISA
+	// In pension months, pension provides income and ISA supplements
+	var monthlyISAPrePension, monthlyISAPensionPeriod float64
+	var monthlyPensionTaxFree, monthlyPensionTaxable float64
+
+	// Total pension income (net after tax) - this is only available in pension months
+	// Approximate net from pension: tax-free is fully net, taxable has ~20-40% tax
+	// For simplicity, use gross pension amounts as that's what the columns show
+	totalPensionGross := totalPensionTaxFree + totalPensionTaxable
+
+	prePensionMonthCount := 12 - pensionMonths
+
+	if pensionMonths > 0 && prePensionMonthCount > 0 {
+		// Mixed year: some months without pension, some with
+		// Pre-pension months: need to cover full monthly need from ISA + other sources
+		// The simulation assumed pension available all year, so ISA may be under-allocated
+		// We need to front-load ISA withdrawals to cover pre-pension months
+
+		// Pension withdrawals concentrated in pension months
+		monthlyPensionTaxFree = totalPensionTaxFree / float64(pensionMonths)
+		monthlyPensionTaxable = totalPensionTaxable / float64(pensionMonths)
+
+		// For pre-pension months, ISA must cover the entire withdrawal need
+		// Calculate what the monthly withdrawal total should be (ISA + pension when available)
+		totalMonthlyWithdrawals := totalISAWithdrawal + totalPensionGross
+
+		// Pre-pension months: all withdrawals must come from ISA
+		// We need (totalMonthlyWithdrawals / 12) per month, all from ISA
+		monthlyWithdrawalNeeded := totalMonthlyWithdrawals / 12
+		monthlyISAPrePension = monthlyWithdrawalNeeded
+
+		// Pension months: pension covers its share, ISA covers the rest
+		// Total ISA available = totalISAWithdrawal
+		// ISA used in pre-pension = monthlyISAPrePension * prePensionMonthCount
+		isaUsedPrePension := monthlyISAPrePension * float64(prePensionMonthCount)
+		isaRemainingForPensionPeriod := totalISAWithdrawal - isaUsedPrePension
+
+		if isaRemainingForPensionPeriod < 0 {
+			// Not enough ISA to cover pre-pension months - ISA gets used up early
+			// Spread ISA over pre-pension months only
+			monthlyISAPrePension = totalISAWithdrawal / float64(prePensionMonthCount)
+			monthlyISAPensionPeriod = 0
+		} else {
+			// Spread remaining ISA over pension months
+			monthlyISAPensionPeriod = isaRemainingForPensionPeriod / float64(pensionMonths)
+		}
+	} else if pensionMonths > 0 {
+		// Full year of pension access
+		monthlyPensionTaxFree = totalPensionTaxFree / 12
+		monthlyPensionTaxable = totalPensionTaxable / 12
+		monthlyISAPrePension = totalISAWithdrawal / 12
+		monthlyISAPensionPeriod = totalISAWithdrawal / 12
+	} else {
+		// No pension access this year - all from ISA
+		monthlyPensionTaxFree = 0
+		monthlyPensionTaxable = 0
+		monthlyISAPrePension = totalISAWithdrawal / 12
+		monthlyISAPensionPeriod = totalISAWithdrawal / 12
+	}
 
 	// Tax year months (April to March)
 	months := []string{"Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"}
@@ -983,19 +1112,44 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 			}
 		}
 
+		// Check if this is a pre-pension access month
+		isPensionAccessible := firstPensionMonth >= 0 && i >= firstPensionMonth
+
+		// Add note for the month pension access begins
+		if firstPensionMonth > 0 && i == firstPensionMonth {
+			notes = "Pension access starts"
+		} else if firstPensionMonth > 0 && i < firstPensionMonth {
+			if notes == "" {
+				notes = "Before pension access"
+			}
+		}
+
 		// ISA deposit handling - spread across year or lump sum
 		monthlyISADeposit := 0.0
-		if totalISADeposit > 0 {
-			// For pension-to-ISA, deposits should happen throughout year
-			monthlyISADeposit = totalISADeposit / 12
+		if totalISADeposit > 0 && isPensionAccessible {
+			// For pension-to-ISA, deposits only happen when pension is accessible
+			monthlyISADeposit = totalISADeposit / float64(pensionMonths)
+		}
+
+		// Determine amounts for this month based on pension accessibility
+		var thisMonthISA, thisMonthPensionTaxFree, thisMonthPensionTaxable float64
+
+		if isPensionAccessible {
+			thisMonthISA = monthlyISAPensionPeriod
+			thisMonthPensionTaxFree = monthlyPensionTaxFree
+			thisMonthPensionTaxable = monthlyPensionTaxable
+		} else {
+			thisMonthISA = monthlyISAPrePension
+			thisMonthPensionTaxFree = 0
+			thisMonthPensionTaxable = 0
 		}
 
 		// Draw row
 		r.pdf.CellFormat(colWidths[0], 4, monthLabel, "1", 0, "L", true, 0, "")
 		r.pdf.CellFormat(colWidths[1], 4, formatMonthlyMoney(monthlyIncome), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[2], 4, formatMonthlyMoney(monthlyISA), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[3], 4, formatMonthlyMoney(monthlyPensionTaxFree), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[4], 4, formatMonthlyMoney(monthlyPensionTaxable), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[2], 4, formatMonthlyMoney(thisMonthISA), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[3], 4, formatMonthlyMoney(thisMonthPensionTaxFree), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[4], 4, formatMonthlyMoney(thisMonthPensionTaxable), "1", 0, "R", true, 0, "")
 		r.pdf.CellFormat(colWidths[5], 4, formatMonthlyMoney(monthlyISADeposit), "1", 0, "R", true, 0, "")
 		r.pdf.CellFormat(colWidths[6], 4, notes, "1", 1, "L", true, 0, "")
 	}

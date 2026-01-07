@@ -1,0 +1,20 @@
+# Binaries
+goPensionForecast
+pensionForecast
+*.exe
+build/
+dist/
+release/
+
+# Exports
+exports/
+
+# IDE
+.idea/
+
+# Config (contains personal data)
+config.yaml
+
+# OS files
+.DS_Store
+Thumbs.db

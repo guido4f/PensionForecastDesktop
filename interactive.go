@@ -242,6 +242,41 @@ func (b *InteractiveConfigBuilder) promptDate(prompt, defaultVal string) string 
 	}
 }
 
+// calculateDefaultRetirementDate calculates a retirement date based on birth date and target age
+func calculateDefaultRetirementDate(birthDate string, targetAge int) string {
+	t, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		// Fallback to a reasonable default
+		return fmt.Sprintf("%d-07-01", time.Now().Year()+5)
+	}
+	retirementYear := t.Year() + targetAge
+	return fmt.Sprintf("%d-%02d-%02d", retirementYear, t.Month(), t.Day())
+}
+
+// promptRetirementDate asks for a retirement date with validation
+func (b *InteractiveConfigBuilder) promptRetirementDate(prompt, birthDate string, defaultAge int) string {
+	defaultDate := calculateDefaultRetirementDate(birthDate, defaultAge)
+	for {
+		fmt.Printf("%s [%s]: ", prompt, defaultDate)
+		input, _ := b.reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+		if input == "" {
+			return defaultDate
+		}
+		if err := validateDate(input); err != nil {
+			fmt.Printf("  ✗ %s\n", err.Error())
+			continue
+		}
+		// Validate the retirement date is in the future and reasonable
+		retDate, _ := time.Parse("2006-01-02", input)
+		if retDate.Before(time.Now()) {
+			fmt.Printf("  ✗ Retirement date should be in the future\n")
+			continue
+		}
+		return input
+	}
+}
+
 // promptInt asks for an integer with a default value
 func (b *InteractiveConfigBuilder) promptInt(prompt string, defaultVal int) int {
 	fmt.Printf("%s [%d]: ", prompt, defaultVal)
@@ -445,13 +480,16 @@ func (b *InteractiveConfigBuilder) BuildDepletionConfig() *Config {
 
 	// Person 1 (required)
 	fmt.Println("─── Person 1 (Primary) ───")
+	person1Name := b.promptString("  Name", b.getDefault("person.name", "Person1"))
+	person1BirthDate := b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person.birth_date", "1975-01-15"))
 	person1 := PersonConfig{
-		Name:            b.promptString("  Name", b.getDefault("person.name", "Person1")),
-		BirthDate:       b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person.birth_date", "1975-01-15")),
-		RetirementAge:   b.promptRetirementAge("  Retirement age", b.getDefaultInt("person.retirement_age", 55)),
-		StatePensionAge: b.promptAge("  State pension age", b.getDefaultInt("person.state_pension_age", 67)),
-		Pension:         b.promptMoney("  Pension pot value", b.getDefaultMoney("person.pension", 500000)),
-		TaxFreeSavings:  b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person.tax_free_savings", 100000)),
+		Name:             person1Name,
+		BirthDate:        person1BirthDate,
+		RetirementDate:   b.promptRetirementDate("  Stop work date (YYYY-MM-DD)", person1BirthDate, b.getDefaultInt("person.retirement_age", 55)),
+		PensionAccessAge: b.promptAge("  Pension access age (DC pension)", b.getDefaultInt("person.pension_access_age", 55)),
+		StatePensionAge:  b.promptAge("  State pension age", b.getDefaultInt("person.state_pension_age", 67)),
+		Pension:          b.promptMoney("  Pension pot value", b.getDefaultMoney("person.pension", 500000)),
+		TaxFreeSavings:   b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person.tax_free_savings", 100000)),
 	}
 	// Check for DB pension for Person 1
 	hasDB1 := b.promptString("  Has defined benefit pension (e.g., Teachers)? (y/n)", "n")
@@ -466,13 +504,16 @@ func (b *InteractiveConfigBuilder) BuildDepletionConfig() *Config {
 	fmt.Println()
 	addPerson2 := b.promptString("─── Add a second person? (y/n)", "n")
 	if strings.ToLower(addPerson2) == "y" || strings.ToLower(addPerson2) == "yes" {
+		person2Name := b.promptString("  Name", b.getDefault("person2.name", "Person2"))
+		person2BirthDate := b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person2.birth_date", "1977-06-20"))
 		person2 := PersonConfig{
-			Name:            b.promptString("  Name", b.getDefault("person2.name", "Person2")),
-			BirthDate:       b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person2.birth_date", "1977-06-20")),
-			RetirementAge:   b.promptRetirementAge("  Retirement age", b.getDefaultInt("person2.retirement_age", 57)),
-			StatePensionAge: b.promptAge("  State pension age", b.getDefaultInt("person2.state_pension_age", 67)),
-			Pension:         b.promptMoney("  Pension pot value", b.getDefaultMoney("person2.pension", 100000)),
-			TaxFreeSavings:  b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person2.tax_free_savings", 50000)),
+			Name:             person2Name,
+			BirthDate:        person2BirthDate,
+			RetirementDate:   b.promptRetirementDate("  Stop work date (YYYY-MM-DD)", person2BirthDate, b.getDefaultInt("person2.retirement_age", 57)),
+			PensionAccessAge: b.promptAge("  Pension access age (DC pension)", b.getDefaultInt("person2.pension_access_age", 57)),
+			StatePensionAge:  b.promptAge("  State pension age", b.getDefaultInt("person2.state_pension_age", 67)),
+			Pension:          b.promptMoney("  Pension pot value", b.getDefaultMoney("person2.pension", 100000)),
+			TaxFreeSavings:   b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person2.tax_free_savings", 50000)),
 		}
 		// Check for DB pension
 		hasDB := b.promptString("  Has defined benefit pension (e.g., Teachers)? (y/n)", "n")
@@ -584,13 +625,16 @@ func (b *InteractiveConfigBuilder) BuildFixedIncomeConfig() *Config {
 
 	// Person 1 (required)
 	fmt.Println("─── Person 1 (Primary) ───")
+	person1Name := b.promptString("  Name", b.getDefault("person.name", "Person1"))
+	person1BirthDate := b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person.birth_date", "1975-01-15"))
 	person1 := PersonConfig{
-		Name:            b.promptString("  Name", b.getDefault("person.name", "Person1")),
-		BirthDate:       b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person.birth_date", "1975-01-15")),
-		RetirementAge:   b.promptRetirementAge("  Retirement age", b.getDefaultInt("person.retirement_age", 55)),
-		StatePensionAge: b.promptAge("  State pension age", b.getDefaultInt("person.state_pension_age", 67)),
-		Pension:         b.promptMoney("  Pension pot value", b.getDefaultMoney("person.pension", 500000)),
-		TaxFreeSavings:  b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person.tax_free_savings", 100000)),
+		Name:             person1Name,
+		BirthDate:        person1BirthDate,
+		RetirementDate:   b.promptRetirementDate("  Stop work date (YYYY-MM-DD)", person1BirthDate, b.getDefaultInt("person.retirement_age", 55)),
+		PensionAccessAge: b.promptAge("  Pension access age (DC pension)", b.getDefaultInt("person.pension_access_age", 55)),
+		StatePensionAge:  b.promptAge("  State pension age", b.getDefaultInt("person.state_pension_age", 67)),
+		Pension:          b.promptMoney("  Pension pot value", b.getDefaultMoney("person.pension", 500000)),
+		TaxFreeSavings:   b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person.tax_free_savings", 100000)),
 	}
 	// Check for DB pension for Person 1
 	hasDB1 := b.promptString("  Has defined benefit pension (e.g., Teachers)? (y/n)", "n")
@@ -605,13 +649,16 @@ func (b *InteractiveConfigBuilder) BuildFixedIncomeConfig() *Config {
 	fmt.Println()
 	addPerson2 := b.promptString("─── Add a second person? (y/n)", "n")
 	if strings.ToLower(addPerson2) == "y" || strings.ToLower(addPerson2) == "yes" {
+		person2Name := b.promptString("  Name", b.getDefault("person2.name", "Person2"))
+		person2BirthDate := b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person2.birth_date", "1977-06-20"))
 		person2 := PersonConfig{
-			Name:            b.promptString("  Name", b.getDefault("person2.name", "Person2")),
-			BirthDate:       b.promptDate("  Birth date (YYYY-MM-DD)", b.getDefault("person2.birth_date", "1977-06-20")),
-			RetirementAge:   b.promptRetirementAge("  Retirement age", b.getDefaultInt("person2.retirement_age", 57)),
-			StatePensionAge: b.promptAge("  State pension age", b.getDefaultInt("person2.state_pension_age", 67)),
-			Pension:         b.promptMoney("  Pension pot value", b.getDefaultMoney("person2.pension", 100000)),
-			TaxFreeSavings:  b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person2.tax_free_savings", 50000)),
+			Name:             person2Name,
+			BirthDate:        person2BirthDate,
+			RetirementDate:   b.promptRetirementDate("  Stop work date (YYYY-MM-DD)", person2BirthDate, b.getDefaultInt("person2.retirement_age", 57)),
+			PensionAccessAge: b.promptAge("  Pension access age (DC pension)", b.getDefaultInt("person2.pension_access_age", 57)),
+			StatePensionAge:  b.promptAge("  State pension age", b.getDefaultInt("person2.state_pension_age", 67)),
+			Pension:          b.promptMoney("  Pension pot value", b.getDefaultMoney("person2.pension", 100000)),
+			TaxFreeSavings:   b.promptMoney("  ISA/savings balance", b.getDefaultMoney("person2.tax_free_savings", 50000)),
 		}
 		// Check for DB pension
 		hasDB := b.promptString("  Has defined benefit pension (e.g., Teachers)? (y/n)", "n")
@@ -780,11 +827,14 @@ func ValidateFixedIncomeConfig(config *Config) []string {
 		}
 	}
 
-	if config.IncomeRequirements.MonthlyBeforeAge <= 0 {
-		missing = append(missing, "monthly_before_age")
-	}
-	if config.IncomeRequirements.MonthlyAfterAge <= 0 {
-		missing = append(missing, "monthly_after_age")
+	// Check income requirements: either tiers or legacy values must be configured
+	if !config.IncomeRequirements.HasTiers() {
+		if config.IncomeRequirements.MonthlyBeforeAge <= 0 {
+			missing = append(missing, "monthly_before_age (or income tiers)")
+		}
+		if config.IncomeRequirements.MonthlyAfterAge <= 0 {
+			missing = append(missing, "monthly_after_age (or income tiers)")
+		}
 	}
 
 	return missing

@@ -97,6 +97,7 @@ type APIResultSummary struct {
 // APIYearSummary provides year-by-year data
 type APIYearSummary struct {
 	Year              int                         `json:"year"`
+	TaxYearLabel      string                      `json:"tax_year_label"` // e.g., "2026/27"
 	Ages              map[string]int              `json:"ages"`
 	RequiredIncome    float64                     `json:"required_income"`
 	MortgageCost      float64                     `json:"mortgage_cost"`
@@ -2088,6 +2089,7 @@ func convertToAPISummary(result SimulationResult, includeYears bool, incomeInfla
 
 			yearSummary := APIYearSummary{
 				Year:                year.Year,
+				TaxYearLabel:        year.TaxYearLabel,
 				Ages:                year.Ages,
 				RequiredIncome:      year.RequiredIncome,
 				MortgageCost:        year.MortgageCost,
@@ -2290,8 +2292,9 @@ const webUIHTML = `<!DOCTYPE html>
         .form-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; align-items: start; }
         .form-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; align-items: start; }
         .form-row-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; align-items: start; }
+        .form-row-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.5rem; align-items: start; }
         @media (max-width: 600px) {
-            .form-row-3, .form-row-4 { grid-template-columns: repeat(2, 1fr); }
+            .form-row-3, .form-row-4, .form-row-5 { grid-template-columns: repeat(2, 1fr); }
         }
         .form-hint {
             font-size: 0.65rem;
@@ -2958,10 +2961,16 @@ const webUIHTML = `<!DOCTYPE html>
                                     <input type="text" id="p1-birth" value="1970-12-15" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
                                 </div>
                             </div>
-                            <div class="form-row-4">
+                            <div class="form-row-5">
                                 <div class="form-group">
-                                    <label>Retire Age</label>
-                                    <input type="number" id="p1-retire" value="55">
+                                    <label>Stop Work</label>
+                                    <input type="text" id="p1-retire" value="2026-07-15" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
+                                    <div class="form-hint">Date (YYYY-MM-DD)</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Pension Age</label>
+                                    <input type="number" id="p1-pension-age" value="55">
+                                    <div class="form-hint">DC access</div>
                                 </div>
                                 <div class="form-group">
                                     <label>SP Age</label>
@@ -3069,10 +3078,16 @@ const webUIHTML = `<!DOCTYPE html>
                                     <input type="text" id="p2-birth" value="1975-01-13" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
                                 </div>
                             </div>
-                            <div class="form-row-4">
+                            <div class="form-row-5">
                                 <div class="form-group">
-                                    <label>Retire Age</label>
-                                    <input type="number" id="p2-retire" value="57">
+                                    <label>Stop Work</label>
+                                    <input type="text" id="p2-retire" value="2032-06-01" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
+                                    <div class="form-hint">Date (YYYY-MM-DD)</div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Pension Age</label>
+                                    <input type="number" id="p2-pension-age" value="57">
+                                    <div class="form-hint">DC access</div>
                                 </div>
                                 <div class="form-group">
                                     <label>SP Age</label>
@@ -4247,7 +4262,8 @@ const webUIHTML = `<!DOCTYPE html>
                 {
                     name: document.getElementById('p1-name').value,
                     birth_date: document.getElementById('p1-birth').value,
-                    retirement_age: parseInt(document.getElementById('p1-retire').value),
+                    retirement_date: document.getElementById('p1-retire').value,
+                    pension_access_age: parseInt(document.getElementById('p1-pension-age').value),
                     state_pension_age: parseInt(document.getElementById('p1-spa').value),
                     pension: parseMoney(document.getElementById('p1-pension').value),
                     tax_free_savings: parseMoney(document.getElementById('p1-isa').value),
@@ -4269,7 +4285,8 @@ const webUIHTML = `<!DOCTYPE html>
                 {
                     name: document.getElementById('p2-name').value,
                     birth_date: document.getElementById('p2-birth').value,
-                    retirement_age: parseInt(document.getElementById('p2-retire').value),
+                    retirement_date: document.getElementById('p2-retire').value,
+                    pension_access_age: parseInt(document.getElementById('p2-pension-age').value),
                     state_pension_age: parseInt(document.getElementById('p2-spa').value),
                     pension: parseMoney(document.getElementById('p2-pension').value),
                     tax_free_savings: parseMoney(document.getElementById('p2-isa').value),
@@ -5112,7 +5129,17 @@ const webUIHTML = `<!DOCTYPE html>
                     const p1 = config.people[0];
                     document.getElementById('p1-name').value = p1.name || '';
                     document.getElementById('p1-birth').value = p1.birth_date || '';
-                    document.getElementById('p1-retire').value = p1.retirement_age || 55;
+                    // Use retirement_date if set, otherwise calculate from retirement_age + birth_date
+                    if (p1.retirement_date) {
+                        document.getElementById('p1-retire').value = p1.retirement_date;
+                    } else if (p1.birth_date && p1.retirement_age) {
+                        const birthYear = parseInt(p1.birth_date.substring(0, 4));
+                        const retireYear = birthYear + p1.retirement_age;
+                        document.getElementById('p1-retire').value = p1.birth_date.replace(/^\d{4}/, retireYear);
+                    } else {
+                        document.getElementById('p1-retire').value = '2026-07-01';
+                    }
+                    document.getElementById('p1-pension-age').value = p1.pension_access_age || 55;
                     document.getElementById('p1-spa').value = p1.state_pension_age || 67;
                     document.getElementById('p1-pension').value = p1.pension || 0;
                     document.getElementById('p1-isa').value = p1.tax_free_savings || 0;
@@ -5125,7 +5152,17 @@ const webUIHTML = `<!DOCTYPE html>
                         const p2 = config.people[1];
                         document.getElementById('p2-name').value = p2.name || '';
                         document.getElementById('p2-birth').value = p2.birth_date || '';
-                        document.getElementById('p2-retire').value = p2.retirement_age || 55;
+                        // Use retirement_date if set, otherwise calculate from retirement_age + birth_date
+                        if (p2.retirement_date) {
+                            document.getElementById('p2-retire').value = p2.retirement_date;
+                        } else if (p2.birth_date && p2.retirement_age) {
+                            const birthYear = parseInt(p2.birth_date.substring(0, 4));
+                            const retireYear = birthYear + p2.retirement_age;
+                            document.getElementById('p2-retire').value = p2.birth_date.replace(/^\d{4}/, retireYear);
+                        } else {
+                            document.getElementById('p2-retire').value = '2030-07-01';
+                        }
+                        document.getElementById('p2-pension-age').value = p2.pension_access_age || 55;
                         document.getElementById('p2-spa').value = p2.state_pension_age || 67;
                         document.getElementById('p2-pension').value = p2.pension || 0;
                         document.getElementById('p2-isa').value = p2.tax_free_savings || 0;
@@ -5338,7 +5375,8 @@ const webUIHTML = `<!DOCTYPE html>
             // Person 1
             csv += 'Person,' + escapeCSV(document.getElementById('p1-name').value) + '\n';
             csv += '  Birth Date,' + document.getElementById('p1-birth').value + '\n';
-            csv += '  Retirement Age,' + document.getElementById('p1-retire').value + '\n';
+            csv += '  Stop Work Date,' + document.getElementById('p1-retire').value + '\n';
+            csv += '  Pension Access Age,' + document.getElementById('p1-pension-age').value + '\n';
             csv += '  State Pension Age,' + document.getElementById('p1-spa').value + '\n';
             csv += '  Pension Pot,' + document.getElementById('p1-pension').value + '\n';
             csv += '  ISA Balance,' + document.getElementById('p1-isa').value + '\n';
@@ -5364,7 +5402,8 @@ const webUIHTML = `<!DOCTYPE html>
             if (p2Element) {
                 csv += 'Person,' + escapeCSV(document.getElementById('p2-name').value) + '\n';
                 csv += '  Birth Date,' + document.getElementById('p2-birth').value + '\n';
-                csv += '  Retirement Age,' + document.getElementById('p2-retire').value + '\n';
+                csv += '  Stop Work Date,' + document.getElementById('p2-retire').value + '\n';
+                csv += '  Pension Access Age,' + document.getElementById('p2-pension-age').value + '\n';
                 csv += '  State Pension Age,' + document.getElementById('p2-spa').value + '\n';
                 csv += '  Pension Pot,' + document.getElementById('p2-pension').value + '\n';
                 csv += '  ISA Balance,' + document.getElementById('p2-isa').value + '\n';

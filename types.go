@@ -1,6 +1,110 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+// TaxYearLabel formats a year as UK tax year format (e.g., 2024 -> "2024/25")
+// The year parameter represents the calendar year in which the tax year starts (April 6)
+func TaxYearLabel(year int) string {
+	nextYearShort := (year + 1) % 100
+	return fmt.Sprintf("%d/%02d", year, nextYearShort)
+}
+
+// TaxYearLabelShort formats a year as short UK tax year format (e.g., 2024 -> "24/25")
+func TaxYearLabelShort(year int) string {
+	yearShort := year % 100
+	nextYearShort := (year + 1) % 100
+	return fmt.Sprintf("%02d/%02d", yearShort, nextYearShort)
+}
+
+// GetAgeInTaxYear calculates the age a person reaches during a given tax year
+// The tax year runs from April 6 to April 5 of the following year
+// birthDate should be in YYYY-MM-DD format
+// taxYearStart is the calendar year when the tax year begins (e.g., 2026 for tax year 2026/27)
+//
+// Example:
+// - Person born July 15, 1971, taxYearStart 2026: Returns 55 (turns 55 on July 15, 2026 during tax year 2026/27)
+// - Person born Feb 10, 1971, taxYearStart 2026: Returns 56 (turns 56 on Feb 10, 2027 during tax year 2026/27)
+func GetAgeInTaxYear(birthDate string, taxYearStart int) int {
+	t, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		// Fallback to simple year subtraction if date parsing fails
+		return taxYearStart - GetBirthYear(birthDate)
+	}
+
+	birthYear := t.Year()
+	birthMonth := int(t.Month())
+	birthDay := t.Day()
+
+	// Tax year runs April 6 to April 5
+	// We want to return the maximum age reached during the tax year
+	//
+	// If birthday is April 6 or later (April 6 - Dec 31):
+	//   They turn (taxYearStart - birthYear) sometime during April-December of taxYearStart
+	//
+	// If birthday is before April 6 (Jan 1 - April 5):
+	//   They turn (taxYearStart + 1 - birthYear) sometime during Jan-April 5 of taxYearStart+1
+
+	// Check if birthday is in the first part of tax year (Apr 6 - Dec 31)
+	if birthMonth > 4 || (birthMonth == 4 && birthDay >= 6) {
+		// Birthday is April 6 or later - they turn this age during the first calendar year of the tax year
+		return taxYearStart - birthYear
+	}
+
+	// Birthday is Jan 1 - April 5 - they turn this age during the second calendar year of the tax year
+	return (taxYearStart + 1) - birthYear
+}
+
+// GetAgeAtTaxYearStart calculates the age at the start of a tax year (April 6)
+// This is useful for determining if someone can already access their pension at the start of the year
+func GetAgeAtTaxYearStart(birthDate string, taxYearStart int) int {
+	t, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		return taxYearStart - GetBirthYear(birthDate)
+	}
+
+	birthYear := t.Year()
+	birthMonth := int(t.Month())
+	birthDay := t.Day()
+
+	// On April 6 of taxYearStart:
+	// - If birthday is April 6 or earlier, they've already had their birthday this calendar year
+	// - If birthday is after April 6, they haven't had their birthday yet
+
+	ageAtTaxYearStart := taxYearStart - birthYear
+	if birthMonth > 4 || (birthMonth == 4 && birthDay > 6) {
+		// Birthday is after April 6, so they haven't had their birthday yet this calendar year
+		ageAtTaxYearStart--
+	}
+
+	return ageAtTaxYearStart
+}
+
+// GetTaxYearForAge returns the tax year (start year) when a person reaches a given age
+// Returns the tax year during which they first reach that age
+func GetTaxYearForAge(birthDate string, targetAge int) int {
+	t, err := time.Parse("2006-01-02", birthDate)
+	if err != nil {
+		return GetBirthYear(birthDate) + targetAge
+	}
+
+	birthYear := t.Year()
+	birthMonth := int(t.Month())
+	birthDay := t.Day()
+
+	// Calendar year when they turn targetAge
+	calendarYearOfBirthday := birthYear + targetAge
+
+	// If birthday is before April 6, the tax year started in the previous calendar year
+	if birthMonth < 4 || (birthMonth == 4 && birthDay <= 5) {
+		return calendarYearOfBirthday - 1
+	}
+
+	// Birthday is April 6 or later, tax year starts in the same calendar year as their birthday
+	return calendarYearOfBirthday
+}
 
 // OptimizationGoal represents what to optimize for when selecting the best strategy
 type OptimizationGoal int
@@ -194,10 +298,14 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 
 // Person represents a person's financial state during simulation
 type Person struct {
-	Name              string
-	BirthYear         int
-	RetirementAge     int
-	StatePensionAge   int
+	Name               string
+	BirthYear          int    // Deprecated: Use BirthDate for tax year calculations
+	BirthDate          string // Full birth date in YYYY-MM-DD format for tax year age calculations
+	RetirementDate     string // Full retirement date in YYYY-MM-DD format (if specified)
+	RetirementAge      int    // Age when income requirements start (stop working)
+	RetirementTaxYear  int    // Tax year when retirement begins (calculated from RetirementDate or RetirementAge)
+	PensionAccessAge   int    // Age when DC pension can be accessed (may be later than RetirementAge)
+	StatePensionAge    int
 	TaxFreeSavings    float64 // ISA (includes crystallised tax-free lump sums)
 	UncrystallisedPot float64 // Pension not yet accessed
 	CrystallisedPot   float64 // Taxable pension pot
@@ -232,15 +340,19 @@ type Person struct {
 // Clone creates a deep copy of a Person
 func (p *Person) Clone() *Person {
 	return &Person{
-		Name:                     p.Name,
-		BirthYear:                p.BirthYear,
-		RetirementAge:            p.RetirementAge,
-		StatePensionAge:          p.StatePensionAge,
-		TaxFreeSavings:           p.TaxFreeSavings,
-		UncrystallisedPot:        p.UncrystallisedPot,
-		CrystallisedPot:          p.CrystallisedPot,
-		PCLSTaken:                p.PCLSTaken,
-		ISAAnnualLimit:           p.ISAAnnualLimit,
+		Name:              p.Name,
+		BirthYear:         p.BirthYear,
+		BirthDate:         p.BirthDate,
+		RetirementDate:    p.RetirementDate,
+		RetirementAge:     p.RetirementAge,
+		RetirementTaxYear: p.RetirementTaxYear,
+		PensionAccessAge:  p.PensionAccessAge,
+		StatePensionAge:   p.StatePensionAge,
+		TaxFreeSavings:    p.TaxFreeSavings,
+		UncrystallisedPot: p.UncrystallisedPot,
+		CrystallisedPot:   p.CrystallisedPot,
+		PCLSTaken:         p.PCLSTaken,
+		ISAAnnualLimit:    p.ISAAnnualLimit,
 		// DB Pension
 		DBPensionAmount:        p.DBPensionAmount,
 		DBPensionStartAge:      p.DBPensionStartAge,
@@ -283,14 +395,27 @@ func (p *Person) TotalWealth() float64 {
 	return p.TaxFreeSavings + p.TotalPension()
 }
 
-// CanAccessPension returns true if the person can access their pension
+// CanAccessPension returns true if the person can access their DC pension during this tax year
+// Uses PensionAccessAge (minimum pension age) not RetirementAge (when income needs start)
+// year is the tax year start (e.g., 2026 for tax year 2026/27)
 func (p *Person) CanAccessPension(year int) bool {
 	// Guard against invalid birth year (would cause incorrect age calculation)
 	if p.BirthYear < 1900 || p.BirthYear > year {
 		return false
 	}
-	age := year - p.BirthYear
-	return age >= p.RetirementAge
+	// Use tax year age calculation if BirthDate is available
+	var age int
+	if p.BirthDate != "" {
+		age = GetAgeInTaxYear(p.BirthDate, year)
+	} else {
+		age = year - p.BirthYear
+	}
+	// Use PensionAccessAge if set, otherwise fall back to RetirementAge for backwards compatibility
+	accessAge := p.PensionAccessAge
+	if accessAge <= 0 {
+		accessAge = p.RetirementAge
+	}
+	return age >= accessAge
 }
 
 // EffectiveStatePensionAge returns the age at which state pension starts (after any deferral)
@@ -298,14 +423,21 @@ func (p *Person) EffectiveStatePensionAge() int {
 	return p.StatePensionAge + p.StatePensionDeferYears
 }
 
-// ReceivesStatePension returns true if the person receives state pension
+// ReceivesStatePension returns true if the person receives state pension during this tax year
 // Accounts for any deferral period
+// year is the tax year start (e.g., 2026 for tax year 2026/27)
 func (p *Person) ReceivesStatePension(year int) bool {
 	// Guard against invalid birth year
 	if p.BirthYear < 1900 || p.BirthYear > year {
 		return false
 	}
-	age := year - p.BirthYear
+	// Use tax year age calculation if BirthDate is available
+	var age int
+	if p.BirthDate != "" {
+		age = GetAgeInTaxYear(p.BirthDate, year)
+	} else {
+		age = year - p.BirthYear
+	}
 	return age >= p.EffectiveStatePensionAge()
 }
 
@@ -324,7 +456,8 @@ func (p *Person) GetDeferredStatePensionAmount(baseAmount float64) float64 {
 	return baseAmount * enhancement
 }
 
-// ReceivesDBPension returns true if the person receives their DB pension
+// ReceivesDBPension returns true if the person receives their DB pension during this tax year
+// year is the tax year start (e.g., 2026 for tax year 2026/27)
 func (p *Person) ReceivesDBPension(year int) bool {
 	if p.DBPensionAmount <= 0 || p.DBPensionStartAge <= 0 {
 		return false
@@ -333,7 +466,13 @@ func (p *Person) ReceivesDBPension(year int) bool {
 	if p.BirthYear < 1900 || p.BirthYear > year {
 		return false
 	}
-	age := year - p.BirthYear
+	// Use tax year age calculation if BirthDate is available
+	var age int
+	if p.BirthDate != "" {
+		age = GetAgeInTaxYear(p.BirthDate, year)
+	} else {
+		age = year - p.BirthYear
+	}
 	return age >= p.DBPensionStartAge
 }
 
@@ -404,7 +543,8 @@ func (p *Person) GetDBPensionLumpSum() float64 {
 	return pensionGivenUp * factor
 }
 
-// IsReceivingPartTimeIncome returns true if person is earning part-time income
+// IsReceivingPartTimeIncome returns true if person is earning part-time income during this tax year
+// year is the tax year start (e.g., 2026 for tax year 2026/27)
 func (p *Person) IsReceivingPartTimeIncome(year int) bool {
 	if p.PartTimeIncome <= 0 {
 		return false
@@ -413,7 +553,13 @@ func (p *Person) IsReceivingPartTimeIncome(year int) bool {
 	if p.BirthYear < 1900 || p.BirthYear > year {
 		return false
 	}
-	age := year - p.BirthYear
+	// Use tax year age calculation if BirthDate is available
+	var age int
+	if p.BirthDate != "" {
+		age = GetAgeInTaxYear(p.BirthDate, year)
+	} else {
+		age = year - p.BirthYear
+	}
 	return age >= p.PartTimeStartAge && age < p.PartTimeEndAge
 }
 
@@ -435,9 +581,10 @@ type WithdrawalBreakdown struct {
 	TotalISADeposits   float64
 }
 
-// YearState holds the complete state for a simulation year
+// YearState holds the complete state for a simulation tax year
 type YearState struct {
-	Year                 int
+	Year                 int    // Tax year start (e.g., 2026 for tax year 2026/27)
+	TaxYearLabel         string // Formatted tax year (e.g., "2026/27")
 	Ages                 map[string]int
 	StartBalance         float64 // Total balance at start of year (before withdrawals/growth)
 	RequiredIncome       float64
@@ -492,10 +639,12 @@ func NewWithdrawalBreakdown() WithdrawalBreakdown {
 	}
 }
 
-// NewYearState creates a new initialized YearState
+// NewYearState creates a new initialized YearState for a tax year
+// year is the tax year start (e.g., 2026 for tax year 2026/27)
 func NewYearState(year int) YearState {
 	return YearState{
 		Year:                 year,
+		TaxYearLabel:         TaxYearLabel(year),
 		Ages:                 make(map[string]int),
 		StatePensionByPerson: make(map[string]float64),
 		DBPensionByPerson:    make(map[string]float64),
