@@ -1295,12 +1295,28 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 
 		if thisMonthNetNeeded > 0 {
 			if isPensionAccessible {
-				// Pension is accessible - use pension for withdrawals
-				thisMonthPensionTaxFree = monthlyPensionTaxFree
-				thisMonthPensionTaxable = monthlyPensionTaxable
-				// ISA supplements if simulation used ISA
+				// Calculate base monthly withdrawal amounts from pension
+				basePensionTaxFree := monthlyPensionTaxFree
+				basePensionTaxable := monthlyPensionTaxable
+				baseISA := 0.0
 				if totalISAWithdrawal > 0 && pensionMonths > 0 {
-					thisMonthISA = totalISAWithdrawal / float64(pensionMonths)
+					baseISA = totalISAWithdrawal / float64(pensionMonths)
+				}
+
+				// Total base withdrawal for a full month (no work income)
+				baseTotal := basePensionTaxFree + basePensionTaxable + baseISA
+
+				// Scale withdrawals to match what's actually needed this month
+				// If work income covers part of the requirement, reduce withdrawals proportionally
+				if baseTotal > 0 && thisMonthNetNeeded < baseTotal {
+					scaleFactor := thisMonthNetNeeded / baseTotal
+					thisMonthPensionTaxFree = basePensionTaxFree * scaleFactor
+					thisMonthPensionTaxable = basePensionTaxable * scaleFactor
+					thisMonthISA = baseISA * scaleFactor
+				} else {
+					thisMonthPensionTaxFree = basePensionTaxFree
+					thisMonthPensionTaxable = basePensionTaxable
+					thisMonthISA = baseISA
 				}
 			} else {
 				// Pre-pension: must use ISA/savings to cover the gap
