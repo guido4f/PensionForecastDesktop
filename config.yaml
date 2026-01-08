@@ -44,11 +44,11 @@
 people:
     - name: James
       birth_date: "1971-07-15"
-      retirement_date: "2026-02-07"
+      retirement_date: "2026-01-07"
       retirement_age: 0
       pension_access_age: 55
       state_pension_age: 67
-      tax_free_savings: 114000
+      tax_free_savings: 118000
       pension: 900000
       isa_annual_limit: 20000
       db_pension_amount: 0
@@ -63,9 +63,15 @@ people:
       part_time_income: 0
       part_time_start_age: 55
       part_time_end_age: 60
+      work_income: 110000
+      isa_to_sipp_enabled: false
+      pension_annual_allowance: 0
+      employer_contribution: 0
+      isa_to_sipp_max_percent: 0
+      isa_to_sipp_preserve_months: 0
     - name: Delphine
       birth_date: "1973-10-23"
-      retirement_date: "2026-10-23"
+      retirement_date: "2027-07-01"
       retirement_age: 0
       pension_access_age: 57
       state_pension_age: 67
@@ -73,8 +79,8 @@ people:
       pension: 80000
       isa_annual_limit: 20000
       db_pension_amount: 5000
-      db_pension_start_age: 57
-      db_pension_name: Teachers Pension
+      db_pension_start_age: 67
+      db_pension_name: School Pension
       db_pension_normal_age: 65
       db_pension_early_factor: 0.04
       db_pension_late_factor: 0.05
@@ -84,13 +90,19 @@ people:
       part_time_income: 0
       part_time_start_age: 55
       part_time_end_age: 60
+      work_income: 33000
+      isa_to_sipp_enabled: false
+      pension_annual_allowance: 0
+      employer_contribution: 0
+      isa_to_sipp_max_percent: 0
+      isa_to_sipp_preserve_months: 0
 financial:
-    pension_growth_rate: 0.05
-    savings_growth_rate: 0.05
+    pension_growth_rate: 0.07
+    savings_growth_rate: 0.07
     income_inflation_rate: 0.03
-    state_pension_amount: 12570
+    state_pension_amount: 11500
     state_pension_inflation: 0.03
-    tax_band_inflation: 0.03
+    tax_band_inflation: 0.02
     state_pension_deferral_rate: 0
     emergency_fund_months: 0
     emergency_fund_inflation_adjust: false
@@ -109,9 +121,6 @@ income_requirements:
     guardrails_upper_limit: 1.2
     guardrails_lower_limit: 0.8
     guardrails_adjustment: 0.1
-    vpw_enabled: false
-    vpw_floor: 0
-    vpw_ceiling: 0
     age_threshold: 67
     reference_person: James
 mortgage:
@@ -124,9 +133,11 @@ mortgage:
           start_year: 2006
     end_year: 2031
     early_payoff_year: 2028
+    allow_extension: false
+    extended_end_year: 0
 simulation:
     start_year: 2026
-    end_age: 100
+    end_age: 95
     reference_person: James
 sensitivity:
     pension_growth_min: 0
@@ -137,21 +148,21 @@ sensitivity:
 strategy:
     maximize_couple_isa: null
 tax_bands:
-    - name: Personal Allowance
+    - name: ""
       lower: 0
       upper: 12570
       rate: 0
-    - name: Basic Rate
+    - name: ""
       lower: 12570
       upper: 50270
       rate: 0.2
-    - name: Higher Rate
+    - name: ""
       lower: 50270
       upper: 125140
       rate: 0.4
-    - name: Additional Rate
+    - name: ""
       lower: 125140
-      upper: 1e+07
+      upper: 9.99999999e+08
       rate: 0.45
 tax:
     personal_allowance: 12570

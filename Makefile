@@ -16,7 +16,7 @@ LDFLAGS=-ldflags "-s -w"
        ui ui-linux ui-macos ui-macos-intel ui-windows \
        console-all console-linux console-macos console-macos-intel console-windows \
        web-all web-linux web-macos web-macos-intel web-windows \
-       web web-port run-ui \
+       web web-port run-ui install-desktop \
        release release-patch release-minor release-major version
 
 # Build all cross-platform (console-only, no CGO required)
@@ -72,6 +72,16 @@ endif
 # Run embedded UI (builds first if needed)
 run-ui: ui
 	./$(BUILD_DIR)/$(BINARY_NAME)-ui -ui
+
+# Install desktop file and icon for Linux (enables taskbar icon)
+install-desktop: ui
+	@echo "Installing desktop file and icon for Linux..."
+	@mkdir -p ~/.local/share/applications
+	@mkdir -p ~/.local/share/icons/hicolor/256x256/apps
+	@sed 's|Exec=.*|Exec=$(PWD)/$(BUILD_DIR)/$(BINARY_NAME)-ui -ui|' pension-forecast.desktop > ~/.local/share/applications/pension-forecast.desktop
+	@cp assets/icon.png ~/.local/share/icons/hicolor/256x256/apps/pension-forecast.png
+	@gtk-update-icon-cache ~/.local/share/icons/hicolor/ 2>/dev/null || true
+	@echo "Desktop file installed. You can now find 'Pension Forecast' in your app menu."
 
 # =============================================================================
 # Console-only builds (no GUI, smaller binaries, for automation/scripting)

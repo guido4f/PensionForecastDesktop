@@ -170,10 +170,9 @@ func cloneConfigWithMultiplier(config *Config, multiplier float64) *Config {
 	// Disable depletion mode in the cloned config to use fixed mode in simulation
 	newConfig.IncomeRequirements.TargetDepletionAge = 0
 
-	// Disable VPW and Guardrails which would override the multiplier-based income
-	// These features dynamically adjust withdrawals based on portfolio performance,
+	// Disable Guardrails which would override the multiplier-based income
+	// This feature dynamically adjusts withdrawals based on portfolio performance,
 	// which interferes with the binary search for sustainable income
-	newConfig.IncomeRequirements.VPWEnabled = false
 	newConfig.IncomeRequirements.GuardrailsEnabled = false
 
 	// Income inflation is now enabled in depletion mode for consistency with fixed income mode.

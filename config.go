@@ -44,6 +44,17 @@ type PersonConfig struct {
 	PartTimeIncome   float64 `yaml:"part_time_income" json:"part_time_income"`       // Annual income from part-time work
 	PartTimeStartAge int     `yaml:"part_time_start_age" json:"part_time_start_age"` // Age when part-time work starts
 	PartTimeEndAge   int     `yaml:"part_time_end_age" json:"part_time_end_age"`     // Age when part-time work ends
+
+	// Pre-retirement work income (salary while still employed)
+	WorkIncome float64 `yaml:"work_income" json:"work_income"` // Annual salary while employed (used before retirement_date)
+
+	// ISA to SIPP Transfer Strategy (pre-retirement optimization)
+	// While working, transfer ISA funds to pension to get tax relief, then withdraw later
+	ISAToSIPPEnabled       bool    `yaml:"isa_to_sipp_enabled" json:"isa_to_sipp_enabled"`               // Enable ISA to SIPP transfers while working
+	PensionAnnualAllowance float64 `yaml:"pension_annual_allowance" json:"pension_annual_allowance"`     // Annual pension contribution limit (default £60,000)
+	EmployerContribution   float64 `yaml:"employer_contribution" json:"employer_contribution"`           // Annual employer pension contribution (reduces available allowance)
+	ISAToSIPPMaxPercent    float64 `yaml:"isa_to_sipp_max_percent" json:"isa_to_sipp_max_percent"`       // Max % of remaining allowance to use (default 100%)
+	ISAToSIPPPreserveMonths int    `yaml:"isa_to_sipp_preserve_months" json:"isa_to_sipp_preserve_months"` // Months of expenses to preserve in ISA (default 12)
 }
 
 // FinancialConfig holds growth and inflation rates
@@ -111,11 +122,6 @@ type IncomeConfig struct {
 	GuardrailsUpperLimit float64 `yaml:"guardrails_upper_limit" json:"guardrails_upper_limit"` // Upper guardrail (e.g., 1.20 = 120% of initial rate)
 	GuardrailsLowerLimit float64 `yaml:"guardrails_lower_limit" json:"guardrails_lower_limit"` // Lower guardrail (e.g., 0.80 = 80% of initial rate)
 	GuardrailsAdjustment float64 `yaml:"guardrails_adjustment" json:"guardrails_adjustment"`   // Adjustment percentage (e.g., 0.10 = 10%)
-
-	// VPW (Variable Percentage Withdrawal) Strategy
-	VPWEnabled bool    `yaml:"vpw_enabled" json:"vpw_enabled"` // Enable VPW-based income calculation
-	VPWFloor   float64 `yaml:"vpw_floor" json:"vpw_floor"`     // Minimum annual withdrawal (optional floor)
-	VPWCeiling float64 `yaml:"vpw_ceiling" json:"vpw_ceiling"` // Maximum as multiple of floor (e.g., 1.5 = 150%)
 
 	// Legacy common field (used when Tiers is empty)
 	AgeThreshold    int    `yaml:"age_threshold,omitempty" json:"age_threshold,omitempty"`
@@ -330,6 +336,8 @@ type MortgageConfig struct {
 	Parts           []MortgagePartConfig `yaml:"parts" json:"parts"`                         // Individual mortgage parts
 	EndYear         int                  `yaml:"end_year" json:"end_year"`                   // Year all mortgages end (for normal payoff scenario)
 	EarlyPayoffYear int                  `yaml:"early_payoff_year" json:"early_payoff_year"` // Year when early payoff can happen (if tied in)
+	AllowExtension  bool                 `yaml:"allow_extension" json:"allow_extension"`     // Whether to include extended mortgage in strategies
+	ExtendedEndYear int                  `yaml:"extended_end_year" json:"extended_end_year"` // Year to extend mortgage to (if AllowExtension is true)
 }
 
 // SimulationConfig holds simulation parameters
@@ -902,4 +910,21 @@ func (c *Config) HasMortgage() bool {
 		}
 	}
 	return false
+}
+
+// GetExtendedEndYear returns the year to extend the mortgage to
+// Returns ExtendedEndYear if set, otherwise falls back to EndYear + 10 for backwards compatibility
+func (c *Config) GetExtendedEndYear() int {
+	if c.Mortgage.ExtendedEndYear > 0 {
+		return c.Mortgage.ExtendedEndYear
+	}
+	// Default: extend by 10 years beyond normal end
+	return c.Mortgage.EndYear + 10
+}
+
+// ShouldIncludeExtendedMortgage returns whether extended mortgage strategies should be included
+func (c *Config) ShouldIncludeExtendedMortgage() bool {
+	// If AllowExtension is explicitly set, use that
+	// For backwards compatibility, default to true if there's a mortgage
+	return c.Mortgage.AllowExtension || c.Mortgage.ExtendedEndYear > 0
 }

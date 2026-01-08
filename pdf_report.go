@@ -63,6 +63,72 @@ func getPensionAccessMonth(birthDate string, pensionAccessAge int, taxYear int) 
 	}
 }
 
+// getLastWorkMonth returns the last month (0-11) in the tax year when a person is still working.
+// Returns -1 if the person has already retired before this tax year started.
+// Returns 11 if the person works through the entire tax year (retirement is next year or later).
+// Tax year months: Apr=0, May=1, Jun=2, Jul=3, Aug=4, Sep=5, Oct=6, Nov=7, Dec=8, Jan=9, Feb=10, Mar=11
+func getLastWorkMonth(retirementDate string, taxYear int) int {
+	t, err := time.Parse("2006-01-02", retirementDate)
+	if err != nil {
+		return -1 // Can't parse, assume not working
+	}
+
+	retireYear := t.Year()
+	retireMonth := int(t.Month())
+	retireDay := t.Day()
+
+	// Tax year runs Apr 6 of taxYear to Apr 5 of taxYear+1
+	// If retirement is before Apr 6 of taxYear, they weren't working this year
+	taxYearStart := time.Date(taxYear, 4, 6, 0, 0, 0, 0, time.UTC)
+	if t.Before(taxYearStart) {
+		return -1 // Already retired before tax year started
+	}
+
+	// If retirement is after Apr 5 of taxYear+1, they work all year
+	taxYearEnd := time.Date(taxYear+1, 4, 5, 0, 0, 0, 0, time.UTC)
+	if t.After(taxYearEnd) {
+		return 11 // Works through entire tax year
+	}
+
+	// Retirement falls within this tax year - find the last working month
+	// The last working month is the month BEFORE retirement, unless retirement is day 1
+	// For simplicity, we'll say they work in the month if retirement is on or after the 15th
+	// If retirement is on the 1st, they don't work that month at all
+
+	var lastWorkingMonth int
+	if retireDay < 15 {
+		// Retiring early in month - last working month is the previous month
+		if retireMonth == 1 {
+			lastWorkingMonth = 12 // December
+			retireYear--
+		} else {
+			lastWorkingMonth = retireMonth - 1
+		}
+	} else {
+		// Retiring late in month - they work part of this month
+		lastWorkingMonth = retireMonth
+	}
+
+	// Convert to tax year month (Apr=0, May=1, ..., Dec=8, Jan=9, Feb=10, Mar=11)
+	if retireYear == taxYear {
+		// Month is Apr-Dec of taxYear
+		if lastWorkingMonth >= 4 {
+			return lastWorkingMonth - 4
+		}
+		// Should not happen - would be before tax year start
+		return -1
+	} else if retireYear == taxYear+1 {
+		// Month is Jan-Mar of taxYear+1
+		if lastWorkingMonth <= 3 {
+			return lastWorkingMonth + 8
+		}
+		// Should not happen - would be after tax year end
+		return 11
+	}
+
+	return -1
+}
+
 // getGrowthDeclineText returns a text description of growth decline, or empty string if not enabled
 func getGrowthDeclineText(config *Config) string {
 	// Helper to extract birth year from date string (YYYY-MM-DD)
@@ -133,7 +199,7 @@ func getMortgagePayoffYear(config *Config, params SimulationParams) int {
 	case MortgageEarly:
 		return config.Mortgage.EarlyPayoffYear
 	case MortgageExtended:
-		return config.Mortgage.EndYear + 10
+		return config.GetExtendedEndYear()
 	case PCLSMortgagePayoff:
 		// PCLS payoff happens when reference person reaches retirement age
 		refPerson := config.GetReferencePerson()
@@ -179,17 +245,20 @@ type YearSummaryPDF struct {
 	TotalTaxPaid      float64
 	NetIncomeReceived float64
 	EndingBalance     float64
+	WorkIncome        float64            // Pre-retirement work income
+	WorkIncomeByPerson map[string]float64 // Work income per person
 }
 
 // MonthlyScheduleItem represents what to do in a specific month
 type MonthlyScheduleItem struct {
-	Month         string
-	NetIncome     float64
-	ISAWithdrawal float64
+	Month          string
+	NetIncome      float64
+	WorkIncome     float64
+	ISAWithdrawal  float64
 	PensionTaxFree float64
 	PensionTaxable float64
-	ISADeposit    float64
-	Notes         string
+	ISADeposit     float64
+	Notes          string
 }
 
 const (
@@ -429,6 +498,70 @@ func (r *PDFActionPlanReport) addStrategyOverview() {
 		r.pdf.CellFormat(contentWidth-35, 5,
 			fmt.Sprintf("%s/month until %d (Age %d)", FormatMoneyPDF(monthlyMortgage), mortgageEndYear, mortgageEndAge),
 			"", 1, "L", false, 0, "")
+	}
+
+	r.pdf.Ln(5)
+
+	// Strategy Options section
+	r.pdf.SetFont("Arial", "B", 11)
+	r.pdf.SetTextColor(0, 51, 102)
+	r.pdf.CellFormat(contentWidth, 7, "Strategy Options", "", 1, "L", false, 0, "")
+
+	r.pdf.SetFont("Arial", "", 10)
+	r.pdf.SetTextColor(50, 50, 50)
+
+	// Helper to add option with explanation
+	addOption := func(label, value, explanation string) {
+		r.pdf.SetFont("Arial", "", 10)
+		r.pdf.SetTextColor(50, 50, 50)
+		r.pdf.CellFormat(45, 5, label, "", 0, "L", false, 0, "")
+		r.pdf.CellFormat(contentWidth-45, 5, value, "", 1, "L", false, 0, "")
+		if explanation != "" {
+			r.pdf.SetFont("Arial", "I", 8)
+			r.pdf.SetTextColor(100, 100, 100)
+			r.pdf.CellFormat(45, 4, "", "", 0, "L", false, 0, "")
+			r.pdf.CellFormat(contentWidth-45, 4, explanation, "", 1, "L", false, 0, "")
+		}
+	}
+
+	// Crystallisation
+	crystalName := "Gradual Crystallisation"
+	crystalExplain := "Move funds to drawdown as needed, taking 25% tax-free from each withdrawal"
+	if r.result.Params.CrystallisationStrategy == UFPLSStrategy {
+		crystalName = "UFPLS (Uncrystallised Funds Pension Lump Sum)"
+		crystalExplain = "Withdraw directly from uncrystallised pot - 25% tax-free, 75% taxable per withdrawal"
+	}
+	addOption("Crystallisation:", crystalName, crystalExplain)
+
+	// Drawdown order with explanation
+	drawdownName, drawdownExplain := r.getDrawdownOrderNameWithExplanation()
+	addOption("Drawdown Order:", drawdownName, drawdownExplain)
+
+	// Guardrails
+	if r.result.Params.GuardrailsEnabled {
+		addOption("Withdrawal Method:", "Guyton-Klinger Guardrails",
+			"Dynamic adjustments based on portfolio performance - cut spending in bad years, increase in good")
+	}
+
+	// State Pension Deferral
+	if r.result.Params.StatePensionDeferYears > 0 {
+		deferText := fmt.Sprintf("%d years (+%.1f%% enhancement)",
+			r.result.Params.StatePensionDeferYears,
+			float64(r.result.Params.StatePensionDeferYears)*5.8)
+		addOption("State Pension Deferral:", deferText,
+			"Delay claiming state pension to receive higher payments (5.8% per year deferred)")
+	}
+
+	// ISA to SIPP
+	if r.result.Params.ISAToSIPPEnabled {
+		addOption("ISA to Pension:", "Enabled",
+			"Transfer ISA savings to pension while working to gain tax relief on contributions")
+	}
+
+	// Maximize Couple ISA
+	if r.result.Params.MaximizeCoupleISA && len(r.config.People) >= 2 {
+		addOption("Couple ISA Strategy:", "Maximize Both Allowances",
+			"Withdraw extra from pension to fill both partners' ISA allowances each year")
 	}
 
 	r.pdf.Ln(5)
@@ -920,20 +1053,42 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	r.pdf.SetTextColor(0, 51, 102)
 	r.pdf.CellFormat(contentWidth, 5, "Monthly Schedule", "", 1, "L", false, 0, "")
 
-	// Show breakdown of net needed (income vs mortgage)
-	if yearState.NetMortgageRequired > 0 {
+	// Show breakdown of requirements including work income
+	hasWorkIncome := yearState.TotalWorkIncome > 0
+	hasMortgage := yearState.NetMortgageRequired > 0
+
+	if hasWorkIncome || hasMortgage {
 		r.pdf.SetFont("Arial", "", 7)
 		r.pdf.SetTextColor(80, 80, 80)
-		r.pdf.CellFormat(contentWidth, 3.5,
-			fmt.Sprintf("Net Needed: %s/month (Income: %s + Mortgage: %s)",
-				FormatMoneyPDF(yearState.NetRequired/12),
-				FormatMoneyPDF(yearState.NetIncomeRequired/12),
-				FormatMoneyPDF(yearState.NetMortgageRequired/12)), "", 1, "L", false, 0, "")
+
+		// Build the breakdown string
+		grossRequired := yearState.RequiredIncome + yearState.MortgageCost
+		breakdown := fmt.Sprintf("Gross: %s/month", FormatMoneyPDF(grossRequired/12))
+
+		// Add components
+		components := []string{}
+		components = append(components, fmt.Sprintf("Income: %s", FormatMoneyPDF(yearState.RequiredIncome/12)))
+		if hasMortgage {
+			components = append(components, fmt.Sprintf("Mortgage: %s", FormatMoneyPDF(yearState.MortgageCost/12)))
+		}
+		breakdown += " (" + strings.Join(components, " + ") + ")"
+
+		// Subtract work income if present
+		if hasWorkIncome {
+			breakdown += fmt.Sprintf(" - Salary: %s", FormatMoneyPDF(yearState.TotalWorkIncome/12))
+		}
+
+		// Show net needed from withdrawals
+		breakdown += fmt.Sprintf(" = Net from Withdrawals: %s", FormatMoneyPDF(yearState.NetRequired/12))
+
+		r.pdf.CellFormat(contentWidth, 3.5, breakdown, "", 1, "L", false, 0, "")
 		r.pdf.Ln(1)
 	}
 
 	// Calculate monthly amounts
-	monthlyIncome := plan.Summary.NetIncomeReceived / 12
+	// Net Needed = the required income that must come from withdrawals (excluding work income)
+	// This is what must be funded from ISA/pension each month
+	monthlyNetRequired := yearState.NetRequired / 12
 
 	// Calculate total ISA withdrawals for this year
 	totalISAWithdrawal := 0.0
@@ -986,46 +1141,28 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	var monthlyISAPrePension, monthlyISAPensionPeriod float64
 	var monthlyPensionTaxFree, monthlyPensionTaxable float64
 
-	// Total pension income (net after tax) - this is only available in pension months
-	// Approximate net from pension: tax-free is fully net, taxable has ~20-40% tax
-	// For simplicity, use gross pension amounts as that's what the columns show
-	totalPensionGross := totalPensionTaxFree + totalPensionTaxable
-
 	prePensionMonthCount := 12 - pensionMonths
 
 	if pensionMonths > 0 && prePensionMonthCount > 0 {
 		// Mixed year: some months without pension, some with
-		// Pre-pension months: need to cover full monthly need from ISA + other sources
-		// The simulation assumed pension available all year, so ISA may be under-allocated
-		// We need to front-load ISA withdrawals to cover pre-pension months
+		// Pre-pension months: need to cover full monthly need from ISA/savings
+		// The simulation assumed pension available all year, so we need to show
+		// what actually needs to happen month by month
 
-		// Pension withdrawals concentrated in pension months
+		// Pension withdrawals concentrated in pension months only
 		monthlyPensionTaxFree = totalPensionTaxFree / float64(pensionMonths)
 		monthlyPensionTaxable = totalPensionTaxable / float64(pensionMonths)
 
-		// For pre-pension months, ISA must cover the entire withdrawal need
-		// Calculate what the monthly withdrawal total should be (ISA + pension when available)
-		totalMonthlyWithdrawals := totalISAWithdrawal + totalPensionGross
+		// For pre-pension months, ISA/savings must cover the withdrawal need
+		// This is the net required (after work income is accounted for)
+		monthlyISAPrePension = monthlyNetRequired
 
-		// Pre-pension months: all withdrawals must come from ISA
-		// We need (totalMonthlyWithdrawals / 12) per month, all from ISA
-		monthlyWithdrawalNeeded := totalMonthlyWithdrawals / 12
-		monthlyISAPrePension = monthlyWithdrawalNeeded
-
-		// Pension months: pension covers its share, ISA covers the rest
-		// Total ISA available = totalISAWithdrawal
-		// ISA used in pre-pension = monthlyISAPrePension * prePensionMonthCount
-		isaUsedPrePension := monthlyISAPrePension * float64(prePensionMonthCount)
-		isaRemainingForPensionPeriod := totalISAWithdrawal - isaUsedPrePension
-
-		if isaRemainingForPensionPeriod < 0 {
-			// Not enough ISA to cover pre-pension months - ISA gets used up early
-			// Spread ISA over pre-pension months only
-			monthlyISAPrePension = totalISAWithdrawal / float64(prePensionMonthCount)
-			monthlyISAPensionPeriod = 0
+		// During pension months, if there are ISA withdrawals in the simulation,
+		// spread them over those months
+		if totalISAWithdrawal > 0 {
+			monthlyISAPensionPeriod = totalISAWithdrawal / float64(pensionMonths)
 		} else {
-			// Spread remaining ISA over pension months
-			monthlyISAPensionPeriod = isaRemainingForPensionPeriod / float64(pensionMonths)
+			monthlyISAPensionPeriod = 0
 		}
 	} else if pensionMonths > 0 {
 		// Full year of pension access
@@ -1041,12 +1178,50 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 		monthlyISAPensionPeriod = totalISAWithdrawal / 12
 	}
 
+	// Calculate work income per month based on retirement dates
+	// Work income is shown for months BEFORE the person's retirement date
+	type workMonthInfo struct {
+		lastWorkMonth int     // -1 means not working this year, 0-11 for Apr-Mar
+		monthlyAmount float64 // Monthly work income (annual / 12)
+	}
+	workInfoByPerson := make(map[string]workMonthInfo)
+	totalAnnualWorkIncome := plan.Summary.WorkIncome
+
+	for _, person := range r.config.People {
+		if person.WorkIncome <= 0 {
+			continue
+		}
+		// Get retirement tax year from retirement date
+		retireTaxYear := 0
+		if person.RetirementDate != "" {
+			retireTaxYear = GetRetirementTaxYear(person.RetirementDate)
+		}
+
+		if retireTaxYear == 0 || retireTaxYear > plan.Year {
+			// Working all year - retirement is next year or later
+			workInfoByPerson[person.Name] = workMonthInfo{
+				lastWorkMonth: 11, // Works through March
+				monthlyAmount: person.WorkIncome / 12,
+			}
+		} else if retireTaxYear == plan.Year {
+			// Retiring this tax year - find the month
+			lastMonth := getLastWorkMonth(person.RetirementDate, plan.Year)
+			if lastMonth >= 0 {
+				workInfoByPerson[person.Name] = workMonthInfo{
+					lastWorkMonth: lastMonth,
+					monthlyAmount: person.WorkIncome / 12,
+				}
+			}
+		}
+		// If retireTaxYear < plan.Year, person already retired - no work income
+	}
+
 	// Tax year months (April to March)
 	months := []string{"Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"}
 
 	// Draw table header with full GBP amounts
-	colWidths := []float64{18, 22, 22, 22, 22, 22, 52}
-	headers := []string{"Month", "Net Needed", "ISA Withdrawal", "Pen Tax-Free", "Pen Taxable", "ISA Deposit", "Notes"}
+	colWidths := []float64{18, 20, 20, 22, 22, 20, 20, 38}
+	headers := []string{"Month", "Net Needed", "Work Income", "ISA Withdraw", "Pen Tax-Free", "Pen Taxable", "ISA Deposit", "Notes"}
 
 	r.pdf.SetFillColor(70, 90, 110)
 	r.pdf.SetTextColor(255, 255, 255)
@@ -1054,7 +1229,7 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 
 	for i, header := range headers {
 		align := "L"
-		if i > 0 && i < 6 {
+		if i > 0 && i < 7 {
 			align = "R"
 		}
 		r.pdf.CellFormat(colWidths[i], 4, header, "1", 0, align, true, 0, "")
@@ -1075,7 +1250,7 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 			r.pdf.SetFont("Arial", "B", 7)
 			for j, header := range headers {
 				align := "L"
-				if j > 0 && j < 6 {
+				if j > 0 && j < 7 {
 					align = "R"
 				}
 				r.pdf.CellFormat(colWidths[j], 4, header, "1", 0, align, true, 0, "")
@@ -1120,7 +1295,9 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 			notes = "Pension access starts"
 		} else if firstPensionMonth > 0 && i < firstPensionMonth {
 			if notes == "" {
-				notes = "Before pension access"
+				notes = "Use ISA/savings bridge"
+			} else {
+				notes += " - ISA bridge"
 			}
 		}
 
@@ -1144,26 +1321,37 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 			thisMonthPensionTaxable = 0
 		}
 
+		// Calculate work income for this month
+		// Sum up work income from all people who are still working in this month
+		thisMonthWorkIncome := 0.0
+		for _, info := range workInfoByPerson {
+			if info.lastWorkMonth >= 0 && i <= info.lastWorkMonth {
+				thisMonthWorkIncome += info.monthlyAmount
+			}
+		}
+
 		// Draw row
 		r.pdf.CellFormat(colWidths[0], 4, monthLabel, "1", 0, "L", true, 0, "")
-		r.pdf.CellFormat(colWidths[1], 4, formatMonthlyMoney(monthlyIncome), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[2], 4, formatMonthlyMoney(thisMonthISA), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[3], 4, formatMonthlyMoney(thisMonthPensionTaxFree), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[4], 4, formatMonthlyMoney(thisMonthPensionTaxable), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[5], 4, formatMonthlyMoney(monthlyISADeposit), "1", 0, "R", true, 0, "")
-		r.pdf.CellFormat(colWidths[6], 4, notes, "1", 1, "L", true, 0, "")
+		r.pdf.CellFormat(colWidths[1], 4, formatMonthlyMoney(monthlyNetRequired), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[2], 4, formatMonthlyMoney(thisMonthWorkIncome), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[3], 4, formatMonthlyMoney(thisMonthISA), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[4], 4, formatMonthlyMoney(thisMonthPensionTaxFree), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[5], 4, formatMonthlyMoney(thisMonthPensionTaxable), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[6], 4, formatMonthlyMoney(monthlyISADeposit), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[7], 4, notes, "1", 1, "L", true, 0, "")
 	}
 
 	// Add totals row
 	r.pdf.SetFont("Arial", "B", 7)
 	r.pdf.SetFillColor(230, 235, 240)
 	r.pdf.CellFormat(colWidths[0], 4, "TOTAL", "1", 0, "L", true, 0, "")
-	r.pdf.CellFormat(colWidths[1], 4, FormatMoneyPDF(plan.Summary.NetIncomeReceived), "1", 0, "R", true, 0, "")
-	r.pdf.CellFormat(colWidths[2], 4, FormatMoneyPDF(totalISAWithdrawal), "1", 0, "R", true, 0, "")
-	r.pdf.CellFormat(colWidths[3], 4, FormatMoneyPDF(totalPensionTaxFree), "1", 0, "R", true, 0, "")
-	r.pdf.CellFormat(colWidths[4], 4, FormatMoneyPDF(totalPensionTaxable), "1", 0, "R", true, 0, "")
-	r.pdf.CellFormat(colWidths[5], 4, FormatMoneyPDF(totalISADeposit), "1", 0, "R", true, 0, "")
-	r.pdf.CellFormat(colWidths[6], 4, "", "1", 1, "L", true, 0, "")
+	r.pdf.CellFormat(colWidths[1], 4, FormatMoneyPDF(yearState.NetRequired), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[2], 4, FormatMoneyPDF(totalAnnualWorkIncome), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[3], 4, FormatMoneyPDF(totalISAWithdrawal), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[4], 4, FormatMoneyPDF(totalPensionTaxFree), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[5], 4, FormatMoneyPDF(totalPensionTaxable), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[6], 4, FormatMoneyPDF(totalISADeposit), "1", 0, "R", true, 0, "")
+	r.pdf.CellFormat(colWidths[7], 4, "", "1", 1, "L", true, 0, "")
 
 	// Add ISA contribution instructions if there are deposits
 	if totalISADeposit > 0 {
@@ -1332,13 +1520,15 @@ func (r *PDFActionPlanReport) buildYearActionPlan(yearState YearState) YearActio
 		Ages:         yearState.Ages,
 		Actions:      make([]ActionItem, 0),
 		Summary: YearSummaryPDF{
-			StartingBalance:   yearState.StartBalance,
-			TotalIncome:       yearState.TotalRequired,
-			TotalWithdrawals:  yearState.Withdrawals.TotalTaxFree + yearState.Withdrawals.TotalTaxable,
-			MortgageCost:      yearState.MortgageCost,
-			TotalTaxPaid:      yearState.TotalTaxPaid,
-			NetIncomeReceived: yearState.NetIncomeReceived,
-			EndingBalance:     yearState.TotalBalance,
+			StartingBalance:    yearState.StartBalance,
+			TotalIncome:        yearState.TotalRequired,
+			TotalWithdrawals:   yearState.Withdrawals.TotalTaxFree + yearState.Withdrawals.TotalTaxable,
+			MortgageCost:       yearState.MortgageCost,
+			TotalTaxPaid:       yearState.TotalTaxPaid,
+			NetIncomeReceived:  yearState.NetIncomeReceived,
+			EndingBalance:      yearState.TotalBalance,
+			WorkIncome:         yearState.TotalWorkIncome,
+			WorkIncomeByPerson: yearState.WorkIncomeByPerson,
 		},
 	}
 
@@ -1693,8 +1883,14 @@ func (r *PDFActionPlanReport) getStrategyDescription() string {
 		desc = "Tax Optimized Withdrawals: Dynamically balance withdrawals between ISA and pension to minimize tax paid."
 	case PensionToISA:
 		desc = "Combined ISA And Pension: Over-withdraw from pension to fill tax bands, transferring excess to ISA for tax-free growth."
+	case PensionToISAProactive:
+		desc = "Combined ISA And Pension (Proactive): Aggressively move pension to ISA while working to maximize tax-free growth."
 	case PensionOnly:
 		desc = "Pension Only: Only withdraw from pension, preserving ISA completely for inheritance."
+	case FillBasicRate:
+		desc = "Fill Basic Rate: Draw pension up to the basic rate tax threshold each year."
+	case StatePensionBridge:
+		desc = "State Pension Bridge: Use pension to bridge income gap until state pension begins."
 	}
 
 	// Only add mortgage description if there is a mortgage
@@ -1712,6 +1908,23 @@ func (r *PDFActionPlanReport) getStrategyDescription() string {
 		}
 	}
 
+	// Add withdrawal adjustment strategies
+	if r.result.Params.GuardrailsEnabled {
+		desc += " Using Guyton-Klinger Guardrails for dynamic withdrawal adjustments."
+	}
+
+	// Add state pension deferral if applicable
+	if r.result.Params.StatePensionDeferYears > 0 {
+		desc += fmt.Sprintf(" State pension deferred by %d years (+%.1f%% enhancement).",
+			r.result.Params.StatePensionDeferYears,
+			float64(r.result.Params.StatePensionDeferYears)*5.8)
+	}
+
+	// Add ISA to SIPP transfer if enabled
+	if r.result.Params.ISAToSIPPEnabled {
+		desc += " Transferring ISA to pension while working for tax relief."
+	}
+
 	return desc
 }
 
@@ -1720,6 +1933,43 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// getDrawdownOrderName returns a human-readable name for the drawdown order
+func (r *PDFActionPlanReport) getDrawdownOrderName() string {
+	name, _ := r.getDrawdownOrderNameWithExplanation()
+	return name
+}
+
+func (r *PDFActionPlanReport) getDrawdownOrderNameWithExplanation() (string, string) {
+	switch r.result.Params.DrawdownOrder {
+	case SavingsFirst:
+		return "ISA First, Then Pension",
+			"Deplete ISA savings first, preserving pension for later (pension benefits from tax-free growth)"
+	case PensionFirst:
+		return "Pension First, Then ISA",
+			"Draw from pension first, preserving ISA (ISA withdrawals are always tax-free)"
+	case TaxOptimized:
+		return "Tax Optimized",
+			"Dynamically choose withdrawals to minimize tax each year based on income and tax bands"
+	case PensionToISA:
+		return "Pension to ISA Transfer",
+			"Over-withdraw from pension to fill ISA allowance, building tax-free savings for later"
+	case PensionToISAProactive:
+		return "Pension to ISA (Proactive)",
+			"Aggressively transfer pension to ISA even when not needed for income"
+	case PensionOnly:
+		return "Pension Only",
+			"Only withdraw from pension, preserving ISA entirely for inheritance or emergencies"
+	case FillBasicRate:
+		return "Fill Basic Rate Band",
+			"Withdraw from pension up to basic rate threshold each year to use tax-efficient allowances"
+	case StatePensionBridge:
+		return "State Pension Bridge",
+			"Higher withdrawals before state pension starts, then reduce when state pension begins"
+	default:
+		return "Standard", "Default withdrawal strategy"
+	}
 }
 
 // getDepletionYears calculates when ISA and Pension funds are depleted

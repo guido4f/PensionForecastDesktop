@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Pension Forecast
+Comment=UK Pension Forecast Simulator
+Exec=/home/james/GolandProjects/goPensionForecast/build/goPensionForecast-ui -ui
+Icon=pension-forecast
+Terminal=false
+Type=Application
+Categories=Office;Finance;
+StartupWMClass=pension-forecast

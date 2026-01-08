@@ -28,6 +28,20 @@ func InitializePeople(config *Config) []*Person {
 			pensionAccessAge = retirementAge
 		}
 
+		// ISA to SIPP defaults
+		pensionAnnualAllowance := pc.PensionAnnualAllowance
+		if pensionAnnualAllowance <= 0 {
+			pensionAnnualAllowance = 60000 // UK default
+		}
+		isaToSIPPMaxPercent := pc.ISAToSIPPMaxPercent
+		if isaToSIPPMaxPercent <= 0 {
+			isaToSIPPMaxPercent = 1.0 // 100% by default
+		}
+		isaToSIPPPreserveMonths := pc.ISAToSIPPPreserveMonths
+		if isaToSIPPPreserveMonths <= 0 {
+			isaToSIPPPreserveMonths = 12 // 12 months by default
+		}
+
 		people[i] = &Person{
 			Name:              pc.Name,
 			BirthYear:         GetBirthYear(pc.BirthDate),
@@ -57,6 +71,14 @@ func InitializePeople(config *Config) []*Person {
 			PartTimeIncome:   pc.PartTimeIncome,
 			PartTimeStartAge: pc.PartTimeStartAge,
 			PartTimeEndAge:   pc.PartTimeEndAge,
+			// Pre-retirement work income
+			WorkIncome: pc.WorkIncome,
+			// ISA to SIPP Transfer
+			ISAToSIPPEnabled:        pc.ISAToSIPPEnabled,
+			PensionAnnualAllowance:  pensionAnnualAllowance,
+			EmployerContribution:    pc.EmployerContribution,
+			ISAToSIPPMaxPercent:     isaToSIPPMaxPercent,
+			ISAToSIPPPreserveMonths: isaToSIPPPreserveMonths,
 		}
 	}
 	return people
@@ -79,6 +101,43 @@ func GetReferencePerson(people []*Person, name string) *Person {
 		}
 	}
 	return people[0]
+}
+
+// ApplyParamsToConfig creates a modified copy of the config with strategy params applied
+// This allows factors like GuardrailsEnabled and StatePensionDeferYears
+// to override the config settings when they are set in the SimulationParams
+func ApplyParamsToConfig(params SimulationParams, config *Config) *Config {
+	// Create a shallow copy of the config
+	newConfig := *config
+
+	// Deep copy the people slice since we might modify it
+	newConfig.People = make([]PersonConfig, len(config.People))
+	copy(newConfig.People, config.People)
+
+	// Deep copy nested structs that might be modified
+	newConfig.IncomeRequirements = config.IncomeRequirements
+	newConfig.Financial = config.Financial
+
+	// Apply GuardrailsEnabled from params (overrides config if set)
+	if params.GuardrailsEnabled {
+		newConfig.IncomeRequirements.GuardrailsEnabled = true
+	}
+
+	// Apply state pension deferral to all people if set in params
+	if params.StatePensionDeferYears > 0 {
+		for i := range newConfig.People {
+			newConfig.People[i].StatePensionDeferYears = params.StatePensionDeferYears
+		}
+	}
+
+	return &newConfig
+}
+
+// RunSimulationV2 runs the simulation with params applied to config
+// This is the V2 version that supports the new factor system
+func RunSimulationV2(params SimulationParams, config *Config) SimulationResult {
+	effectiveConfig := ApplyParamsToConfig(params, config)
+	return RunSimulation(params, effectiveConfig)
 }
 
 // RunSimulation runs the complete retirement simulation for given parameters
@@ -116,9 +175,6 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 	if config.IncomeRequirements.GuardrailsEnabled {
 		guardrails = NewGuardrailsState(config)
 	}
-
-	// Initialize VPW state if enabled
-	vpw := NewVPWState(config)
 
 	// Get growth decline reference person (if enabled)
 	var growthDeclineRefPerson *PersonConfig
@@ -262,16 +318,6 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 			}
 		}
 
-		// Apply VPW (Variable Percentage Withdrawal) if enabled (only once retired)
-		// VPW calculates income based on portfolio value and age-based withdrawal rates
-		if vpw != nil && vpw.Enabled && refAge >= refPerson.RetirementAge {
-			state.VPWRate = vpw.GetCurrentRate(refAge)
-			vpwIncome := vpw.CalculateVPWWithdrawal(currentPortfolio, refAge, inflationMultiplier)
-			state.VPWSuggestedIncome = vpwIncome
-			// VPW overrides fixed income when enabled
-			state.RequiredIncome = vpwIncome
-		}
-
 		// Update emergency fund minimums for each person
 		// Based on configured months of expenses
 		if config.Financial.EmergencyFundMonths > 0 {
@@ -311,7 +357,7 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		case MortgageEarly:
 			payoffYear = config.Mortgage.EarlyPayoffYear
 		case MortgageExtended:
-			payoffYear = config.Mortgage.EndYear + 10
+			payoffYear = config.GetExtendedEndYear()
 		case PCLSMortgagePayoff:
 			payoffYear = config.Mortgage.EarlyPayoffYear // PCLS uses early payoff year
 		default: // MortgageNormal
@@ -421,15 +467,26 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 			}
 		}
 
-		// Net amount needed from withdrawals (after state pension, DB pension, part-time income, and PCLS tax-free)
-		state.NetRequired = state.TotalRequired - state.TotalStatePension - state.TotalDBPension - state.PartTimeIncome - pclsTaxFreeTotal
+		// Calculate work income (pre-retirement employment)
+		for _, p := range people {
+			if p.IsWorking(year) {
+				// Apply inflation to work income (salary increases)
+				workInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
+				inflatedWorkIncome := p.WorkIncome * workInflation
+				state.WorkIncomeByPerson[p.Name] = inflatedWorkIncome
+				state.TotalWorkIncome += inflatedWorkIncome
+			}
+		}
+
+		// Net amount needed from withdrawals (after state pension, DB pension, part-time income, work income, and PCLS tax-free)
+		state.NetRequired = state.TotalRequired - state.TotalStatePension - state.TotalDBPension - state.PartTimeIncome - state.TotalWorkIncome - pclsTaxFreeTotal
 		if state.NetRequired < 0 {
 			state.NetRequired = 0
 		}
 
 		// Split NetRequired into income and mortgage components
 		// Other income sources first cover income needs, then mortgage if excess
-		totalOtherIncome := state.TotalStatePension + state.TotalDBPension + state.PartTimeIncome + pclsTaxFreeTotal
+		totalOtherIncome := state.TotalStatePension + state.TotalDBPension + state.PartTimeIncome + state.TotalWorkIncome + pclsTaxFreeTotal
 		if totalOtherIncome >= state.RequiredIncome {
 			// Other income fully covers income needs, excess goes to mortgage
 			state.NetIncomeRequired = 0
@@ -469,6 +526,10 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 					partTimeInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
 					taxableIncome += p.PartTimeIncome * partTimeInflation
 				}
+				// Add work income if still employed
+				if p.IsWorking(year) {
+					taxableIncome += state.WorkIncomeByPerson[p.Name]
+				}
 				taxableIncomeByPerson[p.Name] = taxableIncome
 			}
 			state.Withdrawals = ExecuteDrawdown(people, state.NetRequired, params, year, taxableIncomeByPerson, taxBands)
@@ -482,7 +543,7 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 			state.Withdrawals.TotalTaxFree += pclsWithdrawals.TotalTaxFree
 		}
 
-		// Calculate tax for each person (state pension + DB pension + part-time income + taxable withdrawals)
+		// Calculate tax for each person (state pension + DB pension + part-time income + work income + taxable withdrawals)
 		for _, p := range people {
 			statePension := state.StatePensionByPerson[p.Name]
 			dbPension := state.DBPensionByPerson[p.Name]
@@ -491,17 +552,128 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 				partTimeInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
 				partTimeIncome = p.PartTimeIncome * partTimeInflation
 			}
+			workIncome := state.WorkIncomeByPerson[p.Name] // Will be 0 if not working
 			taxableWithdrawal := state.Withdrawals.TaxableFromPension[p.Name]
-			// State pension, DB pension, and part-time income are all taxable
-			tax := CalculatePersonTax(statePension+dbPension+partTimeIncome, taxableWithdrawal, taxBands)
+			// State pension, DB pension, part-time income, and work income are all taxable
+			tax := CalculatePersonTax(statePension+dbPension+partTimeIncome+workIncome, taxableWithdrawal, taxBands)
 			state.TaxByPerson[p.Name] = tax
 			state.TotalTaxPaid += tax
 		}
 
-		// Calculate net income received (spendable after tax)
-		// = State Pension + DB Pension + Part-time income + Tax-free withdrawals + Taxable withdrawals - Tax paid
+		// Calculate net income received (spendable after tax and mortgage)
+		// = State Pension + DB Pension + Part-time income + Work income + Tax-free withdrawals + Taxable withdrawals - Tax paid - Mortgage
 		totalWithdrawals := state.Withdrawals.TotalTaxFree + state.Withdrawals.TotalTaxable
-		state.NetIncomeReceived = state.TotalStatePension + state.TotalDBPension + state.PartTimeIncome + totalWithdrawals - state.TotalTaxPaid
+		state.NetIncomeReceived = state.TotalStatePension + state.TotalDBPension + state.PartTimeIncome + state.TotalWorkIncome + totalWithdrawals - state.TotalTaxPaid - state.MortgageCost
+
+		// Handle surplus work income - deposit to ISA if work income exceeds expenses
+		// This only applies when NetRequired is 0 or negative (all expenses covered by work income)
+		if state.TotalWorkIncome > 0 && state.NetRequired == 0 {
+			// Calculate how much of work income was needed for expenses
+			// Work income is used after state pension, DB pension, part-time income, and PCLS
+			otherIncomeExcludingWork := state.TotalStatePension + state.TotalDBPension + state.PartTimeIncome + pclsTaxFreeTotal
+			expensesCoveredByOther := math.Min(otherIncomeExcludingWork, state.TotalRequired)
+			remainingExpenses := state.TotalRequired - expensesCoveredByOther
+			workIncomeUsedForExpenses := math.Min(state.TotalWorkIncome, remainingExpenses)
+			surplusWorkIncome := state.TotalWorkIncome - workIncomeUsedForExpenses
+
+			if surplusWorkIncome > 0 {
+				// The surplus is already taxed as part of the person's total income
+				// Calculate net surplus after tax and deposit to ISA
+				for _, p := range people {
+					if p.IsWorking(year) && state.WorkIncomeByPerson[p.Name] > 0 {
+						// Calculate this person's share of surplus (proportional to their work income)
+						personShare := (state.WorkIncomeByPerson[p.Name] / state.TotalWorkIncome) * surplusWorkIncome
+
+						// Estimate effective tax rate on this person's surplus
+						// Use the marginal rate based on their total taxable income
+						totalTaxable := state.StatePensionByPerson[p.Name] + state.DBPensionByPerson[p.Name] + state.WorkIncomeByPerson[p.Name]
+						if p.IsReceivingPartTimeIncome(year) {
+							partTimeInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
+							totalTaxable += p.PartTimeIncome * partTimeInflation
+						}
+						marginalRate := GetMarginalTaxRate(totalTaxable, taxBands)
+						netSurplus := personShare * (1 - marginalRate)
+
+						// Deposit to ISA up to annual limit
+						isaDeposit := math.Min(netSurplus, p.ISAAnnualLimit)
+						p.TaxFreeSavings += isaDeposit
+						state.ISAContributions[p.Name] = isaDeposit
+						state.TotalISAContributions += isaDeposit
+					}
+				}
+			}
+		}
+
+		// ISA to SIPP Transfer Strategy (pre-retirement optimization)
+		// While working, transfer ISA funds to pension to get tax relief at marginal rate
+		// The gross contribution (net + tax relief) goes into the pension
+		// Key insight: £80 from ISA becomes £100 in pension for 20% taxpayer, £133 for 40% taxpayer
+		// Both params.ISAToSIPPEnabled (strategy factor) AND p.ISAToSIPPEnabled (per-person config) must be true
+		// The per-person setting allows filtering (e.g., DB pension holders shouldn't use this)
+		if params.ISAToSIPPEnabled && state.TotalWorkIncome > 0 {
+			for _, p := range people {
+				// Only transfer if person is working (has earnings) and ISA to SIPP is enabled for them
+				// Note: DB pensions (like Teachers Pension) don't accept additional contributions
+				// This only applies to DC pensions/SIPPs
+				if !p.IsWorking(year) || !p.ISAToSIPPEnabled {
+					continue
+				}
+
+				// Calculate available pension contribution room
+				// Annual allowance is the lower of: annual allowance limit or 100% of earnings
+				earnings := state.WorkIncomeByPerson[p.Name]
+				annualAllowanceLimit := p.PensionAnnualAllowance - p.EmployerContribution
+				availableAllowance := math.Min(annualAllowanceLimit, earnings) * p.ISAToSIPPMaxPercent
+
+				if availableAllowance <= 0 {
+					continue
+				}
+
+				// Calculate how much ISA is available (preserve minimum months of expenses)
+				incomeInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
+				monthlyExpenses := config.IncomeRequirements.MonthlyBeforeAge
+				if config.IncomeRequirements.HasTiers() && len(config.IncomeRequirements.Tiers) > 0 {
+					monthlyExpenses = config.IncomeRequirements.Tiers[0].MonthlyAmount
+				}
+				preserveAmount := monthlyExpenses * incomeInflation * float64(p.ISAToSIPPPreserveMonths)
+				availableISA := math.Max(0, p.TaxFreeSavings-preserveAmount)
+
+				if availableISA <= 0 {
+					continue
+				}
+
+				// Calculate marginal tax rate for tax relief
+				totalTaxable := state.StatePensionByPerson[p.Name] + state.DBPensionByPerson[p.Name] + earnings
+				if p.IsReceivingPartTimeIncome(year) {
+					partTimeInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
+					totalTaxable += p.PartTimeIncome * partTimeInflation
+				}
+				marginalRate := GetMarginalTaxRate(totalTaxable, taxBands)
+
+				// The net amount from ISA (already tax-paid money)
+				// When contributed to pension, it gets grossed up by tax relief
+				// Net contribution / (1 - marginalRate) = Gross contribution
+				// So for 40% taxpayer: £60 net becomes £100 gross (£40 tax relief)
+				// For 20% taxpayer: £80 net becomes £100 gross (£20 tax relief)
+				netContribution := math.Min(availableISA, availableAllowance)
+
+				// Cap at the amount that can get relief (can't exceed earnings)
+				if marginalRate > 0 {
+					grossContribution := netContribution / (1 - marginalRate)
+					taxRelief := grossContribution - netContribution
+
+					// Transfer: reduce ISA by net amount, increase pension by gross amount
+					p.TaxFreeSavings -= netContribution
+					p.UncrystallisedPot += grossContribution
+
+					// Track the transfer
+					state.ISAToSIPPByPerson[p.Name] = netContribution
+					state.ISAToSIPPTaxRelief[p.Name] = taxRelief
+					state.TotalISAToSIPP += netContribution
+					state.TotalISAToSIPPRelief += taxRelief
+				}
+			}
+		}
 
 		// Record end of year balances
 		for _, p := range people {

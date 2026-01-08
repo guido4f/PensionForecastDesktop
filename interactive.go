@@ -498,6 +498,11 @@ func (b *InteractiveConfigBuilder) BuildDepletionConfig() *Config {
 		person1.DBPensionAmount = b.promptMoney("    Annual DB pension amount", b.getDefaultMoney("person.db_pension_amount", 5000))
 		person1.DBPensionStartAge = b.promptAge("    DB pension start age", b.getDefaultInt("person.db_pension_start_age", 67))
 	}
+	// Check for current employment (work income before retirement)
+	hasWork1 := b.promptString("  Currently employed? (y/n)", "n")
+	if strings.ToLower(hasWork1) == "y" || strings.ToLower(hasWork1) == "yes" {
+		person1.WorkIncome = b.promptMoney("    Annual salary (gross)", b.getDefaultMoney("person.work_income", 50000))
+	}
 	b.config.People = append(b.config.People, person1)
 
 	// Person 2 (optional)
@@ -521,6 +526,11 @@ func (b *InteractiveConfigBuilder) BuildDepletionConfig() *Config {
 			person2.DBPensionName = b.promptString("    DB pension name", b.getDefault("person2.db_pension_name", "Teachers Pension"))
 			person2.DBPensionAmount = b.promptMoney("    Annual DB pension amount", b.getDefaultMoney("person2.db_pension_amount", 5000))
 			person2.DBPensionStartAge = b.promptAge("    DB pension start age", b.getDefaultInt("person2.db_pension_start_age", 67))
+		}
+		// Check for current employment (work income before retirement)
+		hasWork2 := b.promptString("  Currently employed? (y/n)", "n")
+		if strings.ToLower(hasWork2) == "y" || strings.ToLower(hasWork2) == "yes" {
+			person2.WorkIncome = b.promptMoney("    Annual salary (gross)", b.getDefaultMoney("person2.work_income", 40000))
 		}
 		b.config.People = append(b.config.People, person2)
 	}
@@ -643,6 +653,11 @@ func (b *InteractiveConfigBuilder) BuildFixedIncomeConfig() *Config {
 		person1.DBPensionAmount = b.promptMoney("    Annual DB pension amount", b.getDefaultMoney("person.db_pension_amount", 5000))
 		person1.DBPensionStartAge = b.promptAge("    DB pension start age", b.getDefaultInt("person.db_pension_start_age", 67))
 	}
+	// Check for current employment (work income before retirement)
+	hasWork1 := b.promptString("  Currently employed? (y/n)", "n")
+	if strings.ToLower(hasWork1) == "y" || strings.ToLower(hasWork1) == "yes" {
+		person1.WorkIncome = b.promptMoney("    Annual salary (gross)", b.getDefaultMoney("person.work_income", 50000))
+	}
 	b.config.People = append(b.config.People, person1)
 
 	// Person 2 (optional)
@@ -666,6 +681,11 @@ func (b *InteractiveConfigBuilder) BuildFixedIncomeConfig() *Config {
 			person2.DBPensionName = b.promptString("    DB pension name", b.getDefault("person2.db_pension_name", "Teachers Pension"))
 			person2.DBPensionAmount = b.promptMoney("    Annual DB pension amount", b.getDefaultMoney("person2.db_pension_amount", 5000))
 			person2.DBPensionStartAge = b.promptAge("    DB pension start age", b.getDefaultInt("person2.db_pension_start_age", 67))
+		}
+		// Check for current employment (work income before retirement)
+		hasWork2 := b.promptString("  Currently employed? (y/n)", "n")
+		if strings.ToLower(hasWork2) == "y" || strings.ToLower(hasWork2) == "yes" {
+			person2.WorkIncome = b.promptMoney("    Annual salary (gross)", b.getDefaultMoney("person2.work_income", 40000))
 		}
 		b.config.People = append(b.config.People, person2)
 	}

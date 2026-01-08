@@ -151,13 +151,14 @@ func (s Strategy) String() string {
 type DrawdownOrder int
 
 const (
-	SavingsFirst       DrawdownOrder = iota // Use ISAs first, then pension
-	PensionFirst                            // Use pension first, save ISAs for last
-	TaxOptimized                            // Optimize withdrawal mix to minimize tax
-	PensionToISA                            // Over-draw pension to fill tax bands, excess to ISA
-	PensionOnly                             // Only use pension, never touch ISAs (for pension-only depletion)
-	FillBasicRate                           // Withdraw from pension up to basic rate limit, excess to ISA
-	StatePensionBridge                      // Draw heavily before state pension, reduce after
+	SavingsFirst          DrawdownOrder = iota // Use ISAs first, then pension
+	PensionFirst                               // Use pension first, save ISAs for last
+	TaxOptimized                               // Optimize withdrawal mix to minimize tax
+	PensionToISA                               // Over-draw pension to fill tax bands, excess to ISA (only when income needed)
+	PensionToISAProactive                      // Extract pension to ISA even when work income covers expenses
+	PensionOnly                                // Only use pension, never touch ISAs (for pension-only depletion)
+	FillBasicRate                              // Withdraw from pension up to basic rate limit, excess to ISA
+	StatePensionBridge                         // Draw heavily before state pension, reduce after
 )
 
 func (d DrawdownOrder) String() string {
@@ -170,6 +171,8 @@ func (d DrawdownOrder) String() string {
 		return "Tax Optimized"
 	case PensionToISA:
 		return "Pension to ISA"
+	case PensionToISAProactive:
+		return "Pension to ISA (Proactive)"
 	case PensionOnly:
 		return "Pension Only"
 	case FillBasicRate:
@@ -191,17 +194,108 @@ const (
 	PCLSMortgagePayoff                       // Use 25% PCLS lump sum to pay mortgage (no further 25% tax-free)
 )
 
+// PermutationMode controls how many strategy combinations to generate
+type PermutationMode int
+
+const (
+	ModeQuick         PermutationMode = iota // ~8 combinations - core strategies only
+	ModeStandard                              // ~100 combinations - common variations
+	ModeThorough                              // ~250 combinations - thorough analysis
+	ModeComprehensive                         // ~4000 combinations - all valid combinations
+)
+
+func (m PermutationMode) String() string {
+	switch m {
+	case ModeQuick:
+		return "Quick"
+	case ModeStandard:
+		return "Standard"
+	case ModeThorough:
+		return "Thorough"
+	case ModeComprehensive:
+		return "Comprehensive"
+	default:
+		return "Unknown"
+	}
+}
+
+// FactorID uniquely identifies a strategy factor type
+type FactorID string
+
+const (
+	FactorCrystallisation   FactorID = "crystallisation"
+	FactorDrawdown          FactorID = "drawdown"
+	FactorMortgage          FactorID = "mortgage"
+	FactorMaximizeCoupleISA FactorID = "maximize_couple_isa"
+	FactorISAToSIPP         FactorID = "isa_to_sipp"
+	FactorGuardrails        FactorID = "guardrails"
+	FactorStatePensionDefer FactorID = "state_pension_defer"
+)
+
+// FactorValue represents one possible value for a factor
+type FactorValue struct {
+	ID        string      // Unique identifier (e.g., "gradual", "ufpls")
+	Name      string      // Human-readable name
+	ShortName string      // For compact display
+	Value     interface{} // The actual value (type depends on factor)
+}
+
+// Factor represents a dimension in the strategy space
+type Factor struct {
+	ID             FactorID       // Unique identifier
+	Name           string         // Human-readable name
+	Description    string         // Explanation of the factor
+	Values         []FactorValue  // Available values for this factor
+	DefaultValueID string         // ID of the default value
+	DependsOn      []FactorID     // Other factors this depends on
+	// ApplicableFunc is set by the registry at runtime
+}
+
+// StrategyCombo represents a complete combination of factor values
+type StrategyCombo struct {
+	Values map[FactorID]FactorValue
+}
+
+// Clone creates a copy of the StrategyCombo
+func (sc StrategyCombo) Clone() StrategyCombo {
+	clone := StrategyCombo{Values: make(map[FactorID]FactorValue)}
+	for k, v := range sc.Values {
+		clone.Values[k] = v
+	}
+	return clone
+}
+
 // SimulationParams combines crystallisation strategy and drawdown order
 type SimulationParams struct {
+	// Existing core factors
 	CrystallisationStrategy Strategy
 	DrawdownOrder           DrawdownOrder
 	EarlyMortgagePayoff     bool           // Deprecated: use MortgageOpt instead
 	MortgageOpt             MortgageOption // How mortgage is handled
 	MaximizeCoupleISA       bool           // For PensionToISA: fill both people's ISA allowances from one pension
+	ISAToSIPPEnabled        bool           // Enable ISA to SIPP transfers while working (pre-retirement optimization)
+
+	// NEW: Dynamic adjustment strategies
+	GuardrailsEnabled bool // Enable Guyton-Klinger guardrails
+
+	// NEW: State pension deferral (applies to all people)
+	StatePensionDeferYears int // Years to defer state pension (0, 2, or 5)
+
+	// Metadata for tracking and filtering
+	SourceCombo *StrategyCombo // Original combo this was generated from
 }
 
 func (sp SimulationParams) String() string {
 	base := sp.DrawdownOrder.String()
+	if sp.ISAToSIPPEnabled {
+		base = "ISA→SIPP " + base
+	}
+	if sp.GuardrailsEnabled {
+		base = base + " +Guardrails"
+	}
+	if sp.StatePensionDeferYears > 0 {
+		base = base + fmt.Sprintf(" +Defer%dy", sp.StatePensionDeferYears)
+	}
 	switch sp.MortgageOpt {
 	case MortgageEarly:
 		return base + " (Early Payoff)"
@@ -215,24 +309,44 @@ func (sp SimulationParams) String() string {
 }
 
 func (sp SimulationParams) ShortName() string {
-	orderShort := "ISAFirst"
-	if sp.DrawdownOrder == PensionFirst {
+	var orderShort string
+	switch sp.DrawdownOrder {
+	case SavingsFirst:
+		orderShort = "ISAFirst"
+	case PensionFirst:
 		orderShort = "PenFirst"
-	} else if sp.DrawdownOrder == TaxOptimized {
+	case TaxOptimized:
 		orderShort = "TaxOpt"
-	} else if sp.DrawdownOrder == PensionToISA {
+	case PensionToISA:
 		orderShort = "Combined"
-	} else if sp.DrawdownOrder == PensionOnly {
+	case PensionToISAProactive:
+		orderShort = "Combined+"
+	case PensionOnly:
 		orderShort = "PenOnly"
-	} else if sp.DrawdownOrder == FillBasicRate {
+	case FillBasicRate:
 		orderShort = "FillBasic"
-	} else if sp.DrawdownOrder == StatePensionBridge {
+	case StatePensionBridge:
 		orderShort = "SPBridge"
+	default:
+		orderShort = "Unknown"
 	}
 
 	// Prefix with U/ for UFPLS
 	if sp.CrystallisationStrategy == UFPLSStrategy {
 		orderShort = "U/" + orderShort
+	}
+
+	// Prefix with I2S/ for ISA to SIPP
+	if sp.ISAToSIPPEnabled {
+		orderShort = "I2S/" + orderShort
+	}
+
+	// Add new factor suffixes
+	if sp.GuardrailsEnabled {
+		orderShort = orderShort + "/GR"
+	}
+	if sp.StatePensionDeferYears > 0 {
+		orderShort = orderShort + fmt.Sprintf("/D%d", sp.StatePensionDeferYears)
 	}
 
 	switch sp.MortgageOpt {
@@ -259,6 +373,8 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 		drawdownDesc = "Tax Optimized Withdrawals"
 	case PensionToISA:
 		drawdownDesc = "Combined ISA And Pension"
+	case PensionToISAProactive:
+		drawdownDesc = "Combined ISA And Pension (Proactive)"
 	case PensionOnly:
 		drawdownDesc = "Pension Only"
 	case FillBasicRate:
@@ -272,6 +388,23 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 	// Add crystallisation type if UFPLS
 	if sp.CrystallisationStrategy == UFPLSStrategy {
 		drawdownDesc = "UFPLS " + drawdownDesc
+	}
+
+	// Add ISA to SIPP pre-retirement strategy
+	if sp.ISAToSIPPEnabled {
+		drawdownDesc = "ISA→SIPP " + drawdownDesc
+	}
+
+	// Add new factor descriptions
+	var extras []string
+	if sp.GuardrailsEnabled {
+		extras = append(extras, "Guardrails")
+	}
+	if sp.StatePensionDeferYears > 0 {
+		extras = append(extras, fmt.Sprintf("SP Defer %dy", sp.StatePensionDeferYears))
+	}
+	if len(extras) > 0 {
+		drawdownDesc = drawdownDesc + " (" + joinStrings(extras, ", ") + ")"
 	}
 
 	// Only add mortgage description if there is a mortgage (year > 0)
@@ -294,6 +427,18 @@ func (sp SimulationParams) DescriptiveName(mortgagePayoffYear int) string {
 	}
 
 	return drawdownDesc + ", " + mortgageDesc
+}
+
+// joinStrings joins strings with a separator (helper for DescriptiveName)
+func joinStrings(strs []string, sep string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	result := strs[0]
+	for i := 1; i < len(strs); i++ {
+		result += sep + strs[i]
+	}
+	return result
 }
 
 // Person represents a person's financial state during simulation
@@ -335,6 +480,16 @@ type Person struct {
 	PartTimeIncome    float64 // Annual income from part-time work
 	PartTimeStartAge  int     // Age when part-time work starts
 	PartTimeEndAge    int     // Age when part-time work ends
+
+	// Pre-retirement work income
+	WorkIncome float64 // Annual salary while still employed (before RetirementDate)
+
+	// ISA to SIPP Transfer Configuration
+	ISAToSIPPEnabled        bool    // Enable ISA to SIPP transfers while working
+	PensionAnnualAllowance  float64 // Annual pension contribution limit (default £60,000)
+	EmployerContribution    float64 // Annual employer pension contribution (reduces available allowance)
+	ISAToSIPPMaxPercent     float64 // Max % of remaining allowance to use (default 100%)
+	ISAToSIPPPreserveMonths int     // Months of expenses to preserve in ISA
 }
 
 // Clone creates a deep copy of a Person
@@ -373,6 +528,14 @@ func (p *Person) Clone() *Person {
 		PartTimeIncome:   p.PartTimeIncome,
 		PartTimeStartAge: p.PartTimeStartAge,
 		PartTimeEndAge:   p.PartTimeEndAge,
+		// Pre-retirement work income
+		WorkIncome: p.WorkIncome,
+		// ISA to SIPP Transfer
+		ISAToSIPPEnabled:        p.ISAToSIPPEnabled,
+		PensionAnnualAllowance:  p.PensionAnnualAllowance,
+		EmployerContribution:    p.EmployerContribution,
+		ISAToSIPPMaxPercent:     p.ISAToSIPPMaxPercent,
+		ISAToSIPPPreserveMonths: p.ISAToSIPPPreserveMonths,
 	}
 }
 
@@ -563,6 +726,26 @@ func (p *Person) IsReceivingPartTimeIncome(year int) bool {
 	return age >= p.PartTimeStartAge && age < p.PartTimeEndAge
 }
 
+// IsWorking returns true if the person is still employed (before retirement date/age)
+// year is the tax year start (e.g., 2026 for tax year 2026/27)
+func (p *Person) IsWorking(year int) bool {
+	if p.WorkIncome <= 0 {
+		return false
+	}
+	// Use RetirementTaxYear if set (calculated from RetirementDate or RetirementAge)
+	if p.RetirementTaxYear > 0 {
+		return year < p.RetirementTaxYear
+	}
+	// Fallback to age-based calculation
+	var age int
+	if p.BirthDate != "" {
+		age = GetAgeInTaxYear(p.BirthDate, year)
+	} else {
+		age = year - p.BirthYear
+	}
+	return age < p.RetirementAge
+}
+
 // PersonBalances holds end-of-year balances for a person
 type PersonBalances struct {
 	TaxFreeSavings    float64
@@ -607,15 +790,22 @@ type YearState struct {
 	GuardrailsTriggered   int     // -1 = reduced, 0 = no change, 1 = increased
 	GuardrailsAdjusted    float64 // The adjusted income amount (if guardrails enabled)
 	PartTimeIncome        float64 // Income from part-time work (phased retirement)
-	// VPW tracking
-	VPWRate              float64 // VPW percentage for reference person's age
-	VPWSuggestedIncome   float64 // VPW-calculated income (portfolio * rate)
+	// Pre-retirement work income
+	WorkIncomeByPerson    map[string]float64 // Work income per person (before retirement)
+	TotalWorkIncome       float64            // Combined work income from both people
+	ISAContributions      map[string]float64 // Surplus work income added to ISA per person
+	TotalISAContributions float64            // Total surplus added to ISA
 	// Tax band tracking
 	PersonalAllowance    float64 // Inflated personal allowance for this year
 	BasicRateLimit       float64 // Inflated basic rate limit for this year
 	// Growth rate tracking (for gradual decline feature)
 	PensionGrowthRateUsed float64 // Actual pension growth rate used this year
 	SavingsGrowthRateUsed float64 // Actual ISA growth rate used this year
+	// ISA to SIPP transfers (pre-retirement optimization)
+	ISAToSIPPByPerson     map[string]float64 // Net amount transferred from ISA per person
+	ISAToSIPPTaxRelief    map[string]float64 // Tax relief received per person
+	TotalISAToSIPP        float64            // Total net transferred from ISA
+	TotalISAToSIPPRelief  float64            // Total tax relief received
 }
 
 // SimulationResult holds the complete results of a simulation run
@@ -651,5 +841,9 @@ func NewYearState(year int) YearState {
 		Withdrawals:          NewWithdrawalBreakdown(),
 		TaxByPerson:          make(map[string]float64),
 		EndBalances:          make(map[string]PersonBalances),
+		WorkIncomeByPerson:   make(map[string]float64),
+		ISAContributions:     make(map[string]float64),
+		ISAToSIPPByPerson:    make(map[string]float64),
+		ISAToSIPPTaxRelief:   make(map[string]float64),
 	}
 }

@@ -114,6 +114,31 @@ func CalculateMarginalTax(withdrawalAmount, existingIncome float64, bands []TaxB
 	return CalculateMarginalTaxWithConfig(withdrawalAmount, existingIncome, bands, DefaultTaxConfig())
 }
 
+// GetMarginalTaxRate returns the marginal tax rate for a given income level
+// This is the tax rate that would apply to the next pound of income
+func GetMarginalTaxRate(income float64, bands []TaxBand) float64 {
+	if income <= 0 {
+		return 0
+	}
+
+	// Apply tapering to get adjusted bands
+	adjustedBands := ApplyPersonalAllowanceTapering(bands, income)
+
+	// Find the band that contains this income level
+	for _, band := range adjustedBands {
+		if income >= band.Lower && income < band.Upper {
+			return band.Rate
+		}
+	}
+
+	// If above all bands, use the highest rate
+	if len(adjustedBands) > 0 {
+		return adjustedBands[len(adjustedBands)-1].Rate
+	}
+
+	return 0
+}
+
 // GrossUpForTaxWithConfig calculates the gross amount needed to achieve a net amount after tax
 // Uses binary search to find the gross amount
 func GrossUpForTaxWithConfig(netNeeded, existingIncome float64, bands []TaxBand, taxConfig TaxConfig) (gross, tax float64) {

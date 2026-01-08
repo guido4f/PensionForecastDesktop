@@ -751,3 +751,592 @@ func TestPensionWithdrawalsRespectRetirementAge(t *testing.T) {
 
 	t.Logf("Verified: Person2 pension withdrawals respect retirement age (57)")
 }
+
+// =============================================================================
+// Working Past Pension Age Scenarios
+// =============================================================================
+
+func TestScenario_WorkingPastPersonalPensionAge(t *testing.T) {
+	// Scenario: Person continues working past their personal pension access age
+	// They can access their pension but work income should cover expenses
+	// Surplus work income should be deposited into ISA
+
+	config := &Config{
+		People: []PersonConfig{
+			{
+				Name:             "Worker",
+				BirthDate:        "1970-06-15", // Age 55 in 2025
+				RetirementAge:    60,           // Retires at 60 (2030)
+				PensionAccessAge: 55,           // Can access pension at 55
+				StatePensionAge:  67,
+				TaxFreeSavings:   50000,
+				Pension:          400000,
+				WorkIncome:       60000, // £60k salary while working
+			},
+		},
+		Financial: FinancialConfig{
+			PensionGrowthRate:     0.05,
+			SavingsGrowthRate:     0.04,
+			IncomeInflationRate:   0.025,
+			StatePensionInflation: 0.025,
+			StatePensionAmount:    11500,
+		},
+		IncomeRequirements: IncomeConfig{
+			MonthlyBeforeAge: 3000, // £36k/year - less than work income
+			MonthlyAfterAge:  2500,
+			AgeThreshold:     67,
+			ReferencePerson:  "Worker",
+		},
+		Simulation: SimulationConfig{
+			StartYear:       2025, // Age 55 - can access pension but still working
+			EndAge:          75,
+			ReferencePerson: "Worker",
+		},
+		TaxBands: ukTaxBands2024,
+	}
+
+	result := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+	}, config)
+
+	if len(result.Years) == 0 {
+		t.Fatal("Simulation produced no results")
+	}
+
+	// Verify person can access pension at age 55 (2025)
+	person := &Person{
+		Name:             "Worker",
+		BirthYear:        1970,
+		BirthDate:        "1970-06-15",
+		PensionAccessAge: 55,
+	}
+	if !person.CanAccessPension(2025) {
+		t.Error("Person should be able to access pension at age 55 (year 2025)")
+	}
+
+	// Check years while working (2025-2029, ages 55-59)
+	for _, year := range result.Years {
+		age := year.Ages["Worker"]
+		if age < 60 {
+			// Should have work income
+			workIncome := year.WorkIncomeByPerson["Worker"]
+			if workIncome <= 0 {
+				t.Errorf("Year %d (age %d): Should have work income while employed, got £%.2f",
+					year.Year, age, workIncome)
+			}
+
+			// No income requirement while working (income only required after retirement)
+			if year.RequiredIncome > 0 {
+				t.Errorf("Year %d (age %d): Should not have income requirement while working, got £%.2f",
+					year.Year, age, year.RequiredIncome)
+			}
+
+			// Pension should NOT be touched while working (no need to withdraw)
+			pensionWithdrawal := year.Withdrawals.TaxableFromPension["Worker"] + year.Withdrawals.TaxFreeFromPension["Worker"]
+			if pensionWithdrawal > 0 {
+				t.Errorf("Year %d (age %d): Should not need pension withdrawals while working, got £%.2f",
+					year.Year, age, pensionWithdrawal)
+			}
+
+			// Surplus work income should go to ISA (after tax)
+			isaContribution := year.ISAContributions["Worker"]
+			if isaContribution <= 0 {
+				t.Logf("Year %d (age %d): Expected ISA contribution from surplus income, got £%.2f",
+					year.Year, age, isaContribution)
+			}
+		}
+	}
+
+	// Check that retirement kicks in at age 60 (2030)
+	foundRetirement := false
+	for _, year := range result.Years {
+		age := year.Ages["Worker"]
+		if age == 60 {
+			foundRetirement = true
+			// Should have income requirement after retirement
+			if year.RequiredIncome <= 0 {
+				t.Errorf("Year %d (age %d): Should have income requirement after retirement", year.Year, age)
+			}
+			// Should not have work income after retirement
+			if year.WorkIncomeByPerson["Worker"] > 0 {
+				t.Errorf("Year %d (age %d): Should not have work income after retirement, got £%.2f",
+					year.Year, age, year.WorkIncomeByPerson["Worker"])
+			}
+			break
+		}
+	}
+
+	if !foundRetirement {
+		t.Error("Did not find year when retirement begins (age 60)")
+	}
+
+	t.Logf("Working past pension age: Person worked ages 55-59 with pension access, retired at 60")
+}
+
+func TestScenario_WorkingPastStatePensionAge(t *testing.T) {
+	// Scenario: Person continues working past both personal pension age AND state pension age
+	// They receive state pension AND work income simultaneously
+	// This is a realistic scenario for people who want to maximize retirement funds
+
+	config := &Config{
+		People: []PersonConfig{
+			{
+				Name:             "LateRetirer",
+				BirthDate:        "1960-03-15", // Age 66 in 2026, age 67 in 2027
+				RetirementAge:    70,           // Retires at 70 (2030)
+				PensionAccessAge: 55,           // Can access pension from 55
+				StatePensionAge:  66,           // State pension from 66
+				TaxFreeSavings:   100000,
+				Pension:          500000,
+				WorkIncome:       75000, // £75k salary while working
+			},
+		},
+		Financial: FinancialConfig{
+			PensionGrowthRate:     0.05,
+			SavingsGrowthRate:     0.04,
+			IncomeInflationRate:   0.025,
+			StatePensionInflation: 0.025,
+			StatePensionAmount:    11500,
+		},
+		IncomeRequirements: IncomeConfig{
+			MonthlyBeforeAge: 3500, // £42k/year
+			MonthlyAfterAge:  3000,
+			AgeThreshold:     75,
+			ReferencePerson:  "LateRetirer",
+		},
+		Simulation: SimulationConfig{
+			StartYear:       2026, // Age 66 - already past personal pension age, at state pension age
+			EndAge:          85,
+			ReferencePerson: "LateRetirer",
+		},
+		TaxBands: ukTaxBands2024,
+	}
+
+	result := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+	}, config)
+
+	if len(result.Years) == 0 {
+		t.Fatal("Simulation produced no results")
+	}
+
+	// Test years from 2026 to 2029 - working past state pension age
+	// Note: With March 15 birthday, in tax year 2026/27 they are age 67 (turn 67 on March 15, 2027)
+	for _, year := range result.Years {
+		age := year.Ages["LateRetirer"]
+
+		// Ages 67-69: Still working, receiving state pension (age 67+ due to tax year calculation)
+		if age >= 67 && age < 70 {
+			// Should have work income
+			workIncome := year.WorkIncomeByPerson["LateRetirer"]
+			if workIncome <= 0 {
+				t.Errorf("Year %d (age %d): Should have work income while employed, got £%.2f",
+					year.Year, age, workIncome)
+			}
+
+			// Should receive state pension while still working
+			statePension := year.StatePensionByPerson["LateRetirer"]
+			if statePension <= 0 {
+				t.Errorf("Year %d (age %d): Should receive state pension (age >= 66), got £%.2f",
+					year.Year, age, statePension)
+			}
+
+			// No income requirement while working
+			if year.RequiredIncome > 0 {
+				t.Errorf("Year %d (age %d): Should not have income requirement while working, got £%.2f",
+					year.Year, age, year.RequiredIncome)
+			}
+
+			// Combined income should be substantial (work + state pension)
+			totalIncome := workIncome + statePension
+			if totalIncome < 85000 {
+				t.Errorf("Year %d (age %d): Total income (work + state pension) should be > £85k, got £%.2f",
+					year.Year, age, totalIncome)
+			}
+
+			t.Logf("Year %d (age %d): Work income £%.0f + State pension £%.0f = Total £%.0f",
+				year.Year, age, workIncome, statePension, totalIncome)
+		}
+
+		// Age 70+: Retired, still receiving state pension but no work income
+		if age >= 70 {
+			// Should NOT have work income after retirement
+			if year.WorkIncomeByPerson["LateRetirer"] > 0 {
+				t.Errorf("Year %d (age %d): Should not have work income after retirement, got £%.2f",
+					year.Year, age, year.WorkIncomeByPerson["LateRetirer"])
+			}
+
+			// Should still receive state pension
+			statePension := year.StatePensionByPerson["LateRetirer"]
+			if statePension <= 0 {
+				t.Errorf("Year %d (age %d): Should still receive state pension after retirement, got £%.2f",
+					year.Year, age, statePension)
+			}
+
+			// Should have income requirement after retirement
+			if year.RequiredIncome <= 0 {
+				t.Errorf("Year %d (age %d): Should have income requirement after retirement", year.Year, age)
+			}
+
+			// Only check first year after retirement
+			break
+		}
+	}
+
+	// Verify pension access was available much earlier than state pension
+	person := &Person{
+		Name:             "LateRetirer",
+		BirthYear:        1960,
+		BirthDate:        "1960-03-15",
+		PensionAccessAge: 55,
+		StatePensionAge:  66,
+	}
+
+	// Could access pension from 2015 (age 55)
+	if !person.CanAccessPension(2015) {
+		t.Error("Person should be able to access pension from age 55 (year 2015)")
+	}
+
+	// State pension from 2025 (age 66) - with March birthday, they turn 66 in tax year 2025/26
+	// (March 15 falls before April 6, so they reach 66 during tax year 2025)
+	if !person.ReceivesStatePension(2025) {
+		t.Error("Person should receive state pension in tax year 2025 (turns 66 on March 15, 2026)")
+	}
+	// Should NOT receive before age 66 (tax year 2024)
+	if person.ReceivesStatePension(2024) {
+		t.Error("Person should NOT receive state pension in tax year 2024 (still 65)")
+	}
+
+	t.Logf("Working past state pension age: Person worked ages 66-69 receiving both salary and state pension")
+}
+
+func TestScenario_WorkingPastBothPensionAgesWithCouple(t *testing.T) {
+	// Scenario: One person works past their pension ages, the other retires earlier
+	// Tests that the simulation correctly handles asymmetric retirement dates
+
+	config := &Config{
+		People: []PersonConfig{
+			{
+				Name:             "EarlyRetirer",
+				BirthDate:        "1968-01-01", // Age 57 in 2025
+				RetirementAge:    57,           // Retires immediately in 2025
+				PensionAccessAge: 55,
+				StatePensionAge:  67,
+				TaxFreeSavings:   80000,
+				Pension:          350000,
+				WorkIncome:       0, // Already retired
+			},
+			{
+				Name:             "LateWorker",
+				BirthDate:        "1965-06-15", // Age 60 in 2025
+				RetirementAge:    68,           // Works until 68
+				PensionAccessAge: 55,
+				StatePensionAge:  67,
+				TaxFreeSavings:   120000,
+				Pension:          600000,
+				WorkIncome:       80000, // High salary
+			},
+		},
+		Financial: FinancialConfig{
+			PensionGrowthRate:     0.05,
+			SavingsGrowthRate:     0.04,
+			IncomeInflationRate:   0.025,
+			StatePensionInflation: 0.025,
+			StatePensionAmount:    11500,
+		},
+		IncomeRequirements: IncomeConfig{
+			MonthlyBeforeAge: 4000, // £48k/year
+			MonthlyAfterAge:  3500,
+			AgeThreshold:     70,
+			ReferencePerson:  "EarlyRetirer", // Income needs based on early retirer
+		},
+		Simulation: SimulationConfig{
+			StartYear:       2025,
+			EndAge:          85,
+			ReferencePerson: "EarlyRetirer",
+		},
+		TaxBands: ukTaxBands2024,
+	}
+
+	result := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+	}, config)
+
+	if len(result.Years) == 0 {
+		t.Fatal("Simulation produced no results")
+	}
+
+	// Check first few years where LateWorker is still employed
+	for _, year := range result.Years {
+		earlyRetirerAge := year.Ages["EarlyRetirer"]
+		lateWorkerAge := year.Ages["LateWorker"]
+
+		// 2025-2032: LateWorker should be working (ages 60-67)
+		if lateWorkerAge < 68 {
+			workIncome := year.WorkIncomeByPerson["LateWorker"]
+			if workIncome <= 0 {
+				t.Errorf("Year %d: LateWorker (age %d) should have work income, got £%.2f",
+					year.Year, lateWorkerAge, workIncome)
+			}
+		}
+
+		// LateWorker should get state pension from age 67
+		if lateWorkerAge >= 67 {
+			statePension := year.StatePensionByPerson["LateWorker"]
+			if statePension <= 0 {
+				t.Errorf("Year %d: LateWorker (age %d) should receive state pension, got £%.2f",
+					year.Year, lateWorkerAge, statePension)
+			}
+
+			// If still working (age 67), should have both work income AND state pension
+			if lateWorkerAge < 68 {
+				workIncome := year.WorkIncomeByPerson["LateWorker"]
+				if workIncome <= 0 {
+					t.Errorf("Year %d: LateWorker (age %d) should have work income AND state pension",
+						year.Year, lateWorkerAge)
+				}
+				t.Logf("Year %d: LateWorker (age %d) has work income £%.0f AND state pension £%.0f",
+					year.Year, lateWorkerAge, workIncome, statePension)
+			}
+		}
+
+		// EarlyRetirer should NOT have work income (already retired)
+		earlyRetirerWork := year.WorkIncomeByPerson["EarlyRetirer"]
+		if earlyRetirerWork > 0 {
+			t.Errorf("Year %d: EarlyRetirer (age %d) should not have work income, got £%.2f",
+				year.Year, earlyRetirerAge, earlyRetirerWork)
+		}
+
+		// EarlyRetirer gets state pension from age 67
+		if earlyRetirerAge >= 67 {
+			statePension := year.StatePensionByPerson["EarlyRetirer"]
+			if statePension <= 0 {
+				t.Errorf("Year %d: EarlyRetirer (age %d) should receive state pension, got £%.2f",
+					year.Year, earlyRetirerAge, statePension)
+			}
+		}
+	}
+
+	t.Logf("Couple scenario: EarlyRetirer at 57, LateWorker works until 68 (past state pension age 67)")
+}
+
+// =============================================================================
+// ISA to SIPP Transfer Strategy Tests
+// =============================================================================
+
+func TestScenario_ISAToSIPPTransfer(t *testing.T) {
+	// Scenario: Person with work income transfers ISA money to SIPP to get tax relief
+	// Higher rate taxpayer (40%) gets significant benefit from this strategy
+	// £60 from ISA becomes £100 in pension (£40 tax relief)
+
+	config := &Config{
+		People: []PersonConfig{
+			{
+				Name:                   "HighEarner",
+				BirthDate:              "1970-06-15", // Age 55 in 2025
+				RetirementAge:          60,           // Retires at 60
+				PensionAccessAge:       55,
+				StatePensionAge:        67,
+				TaxFreeSavings:         200000,  // £200k ISA
+				Pension:                300000,  // £300k pension
+				WorkIncome:             80000,   // £80k salary (higher rate taxpayer)
+				ISAToSIPPEnabled:       true,    // Enable ISA to SIPP transfers
+				PensionAnnualAllowance: 60000,   // £60k annual allowance
+				EmployerContribution:   5000,    // £5k employer contribution already
+				ISAToSIPPMaxPercent:    1.0,     // Use 100% of available allowance
+				ISAToSIPPPreserveMonths: 12,     // Preserve 12 months expenses in ISA
+			},
+		},
+		Financial: FinancialConfig{
+			PensionGrowthRate:     0.05,
+			SavingsGrowthRate:     0.04,
+			IncomeInflationRate:   0.025,
+			StatePensionInflation: 0.025,
+			StatePensionAmount:    11500,
+		},
+		IncomeRequirements: IncomeConfig{
+			MonthlyBeforeAge: 3000, // £36k/year
+			MonthlyAfterAge:  2500,
+			AgeThreshold:     67,
+			ReferencePerson:  "HighEarner",
+		},
+		Simulation: SimulationConfig{
+			StartYear:       2025,
+			EndAge:          75,
+			ReferencePerson: "HighEarner",
+		},
+		TaxBands: ukTaxBands2024,
+	}
+
+	// Run simulation WITH ISA to SIPP
+	resultWithTransfer := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+		ISAToSIPPEnabled:        true,
+	}, config)
+
+	// Run simulation WITHOUT ISA to SIPP
+	resultWithoutTransfer := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+		ISAToSIPPEnabled:        false,
+	}, config)
+
+	if len(resultWithTransfer.Years) == 0 || len(resultWithoutTransfer.Years) == 0 {
+		t.Fatal("Simulation produced no results")
+	}
+
+	// Check that ISA to SIPP transfers occurred during working years
+	totalTransferred := 0.0
+	totalTaxRelief := 0.0
+	for _, year := range resultWithTransfer.Years {
+		age := year.Ages["HighEarner"]
+		if age < 60 { // Working years
+			transferred := year.ISAToSIPPByPerson["HighEarner"]
+			taxRelief := year.ISAToSIPPTaxRelief["HighEarner"]
+
+			if transferred > 0 {
+				totalTransferred += transferred
+				totalTaxRelief += taxRelief
+
+				t.Logf("Year %d (age %d): ISA→SIPP transfer £%.0f, tax relief £%.0f",
+					year.Year, age, transferred, taxRelief)
+			}
+		}
+	}
+
+	if totalTransferred <= 0 {
+		t.Error("Expected ISA to SIPP transfers during working years, but none occurred")
+	}
+
+	if totalTaxRelief <= 0 {
+		t.Error("Expected tax relief from ISA to SIPP transfers, but none received")
+	}
+
+	// Verify tax relief is approximately correct (40% marginal rate for £80k earner)
+	// Tax relief should be roughly 66% of net contribution (£60 net = £100 gross, so relief = £40)
+	expectedReliefRatio := 0.66 // For 40% taxpayer: 0.40 / (1 - 0.40) = 0.667
+	actualReliefRatio := totalTaxRelief / totalTransferred
+	if actualReliefRatio < 0.5 || actualReliefRatio > 0.8 {
+		t.Errorf("Expected relief ratio around %.2f (40%% taxpayer), got %.2f",
+			expectedReliefRatio, actualReliefRatio)
+	}
+
+	// Compare final balances: ISA to SIPP should result in higher total wealth
+	// because the tax relief is essentially free money
+	finalWithTransfer := 0.0
+	finalWithoutTransfer := 0.0
+	for _, bal := range resultWithTransfer.FinalBalances {
+		finalWithTransfer += bal.TaxFreeSavings + bal.CrystallisedPot + bal.UncrystallisedPot
+	}
+	for _, bal := range resultWithoutTransfer.FinalBalances {
+		finalWithoutTransfer += bal.TaxFreeSavings + bal.CrystallisedPot + bal.UncrystallisedPot
+	}
+
+	t.Logf("Final balance with ISA→SIPP: £%.0f", finalWithTransfer)
+	t.Logf("Final balance without ISA→SIPP: £%.0f", finalWithoutTransfer)
+	t.Logf("Difference: £%.0f", finalWithTransfer-finalWithoutTransfer)
+
+	// The ISA to SIPP strategy should result in higher final balance
+	// (tax relief + compound growth on larger pension pot)
+	if finalWithTransfer <= finalWithoutTransfer {
+		t.Errorf("Expected ISA to SIPP to result in higher final balance, but got £%.0f vs £%.0f",
+			finalWithTransfer, finalWithoutTransfer)
+	}
+
+	t.Logf("ISA to SIPP strategy: Transferred £%.0f, received £%.0f tax relief over %d working years",
+		totalTransferred, totalTaxRelief, 5)
+}
+
+func TestScenario_ISAToSIPPWithDBPension(t *testing.T) {
+	// Scenario: Couple where one person has DB pension (Teachers), one has DC/SIPP
+	// Only the DC pension holder should use ISA to SIPP (DB doesn't accept contributions)
+
+	config := &Config{
+		People: []PersonConfig{
+			{
+				Name:                   "DBPensionHolder",
+				BirthDate:              "1968-01-01", // Teacher with DB pension
+				RetirementAge:          60,
+				PensionAccessAge:       55,
+				StatePensionAge:        67,
+				TaxFreeSavings:         100000,
+				Pension:                50000,       // Small DC SIPP
+				WorkIncome:             55000,       // Teacher salary
+				DBPensionAmount:        25000,       // Teachers Pension
+				DBPensionStartAge:      60,
+				DBPensionName:          "Teachers Pension",
+				ISAToSIPPEnabled:       false,       // DB pension holder typically won't use this
+				PensionAnnualAllowance: 60000,
+			},
+			{
+				Name:                   "SIPPHolder",
+				BirthDate:              "1970-06-15",
+				RetirementAge:          60,
+				PensionAccessAge:       55,
+				StatePensionAge:        67,
+				TaxFreeSavings:         150000,      // £150k ISA
+				Pension:                400000,      // £400k SIPP
+				WorkIncome:             75000,       // £75k salary
+				ISAToSIPPEnabled:       true,        // Use ISA to SIPP for SIPP
+				PensionAnnualAllowance: 60000,
+				EmployerContribution:   3000,
+				ISAToSIPPMaxPercent:    1.0,
+				ISAToSIPPPreserveMonths: 12,
+			},
+		},
+		Financial: FinancialConfig{
+			PensionGrowthRate:     0.05,
+			SavingsGrowthRate:     0.04,
+			IncomeInflationRate:   0.025,
+			StatePensionInflation: 0.025,
+			StatePensionAmount:    11500,
+		},
+		IncomeRequirements: IncomeConfig{
+			MonthlyBeforeAge: 4000,
+			MonthlyAfterAge:  3500,
+			AgeThreshold:     67,
+			ReferencePerson:  "DBPensionHolder",
+		},
+		Simulation: SimulationConfig{
+			StartYear:       2025,
+			EndAge:          80,
+			ReferencePerson: "DBPensionHolder",
+		},
+		TaxBands: ukTaxBands2024,
+	}
+
+	result := RunSimulation(SimulationParams{
+		CrystallisationStrategy: GradualCrystallisation,
+		DrawdownOrder:           TaxOptimized,
+		ISAToSIPPEnabled:        true,
+	}, config)
+
+	if len(result.Years) == 0 {
+		t.Fatal("Simulation produced no results")
+	}
+
+	// Check transfers: DBPensionHolder should NOT have transfers, SIPPHolder should
+	dbTransfers := 0.0
+	sippTransfers := 0.0
+
+	for _, year := range result.Years {
+		dbTransfers += year.ISAToSIPPByPerson["DBPensionHolder"]
+		sippTransfers += year.ISAToSIPPByPerson["SIPPHolder"]
+	}
+
+	// DB pension holder should not have transfers (ISAToSIPPEnabled = false)
+	if dbTransfers > 0 {
+		t.Errorf("DBPensionHolder should not have ISA to SIPP transfers (has DB pension), but got £%.0f", dbTransfers)
+	}
+
+	// SIPP holder should have transfers
+	if sippTransfers <= 0 {
+		t.Error("SIPPHolder should have ISA to SIPP transfers, but got none")
+	}
+
+	t.Logf("Couple scenario: DBPensionHolder transfers: £%.0f, SIPPHolder transfers: £%.0f", dbTransfers, sippTransfers)
+}

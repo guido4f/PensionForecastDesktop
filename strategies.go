@@ -180,8 +180,11 @@ func ExecuteDrawdown(people []*Person, netNeeded float64, params SimulationParam
 		// Use optimized withdrawal strategy
 		return ExecuteOptimizedDrawdown(people, netNeeded, params.CrystallisationStrategy, year, statePensionByPerson, taxBands)
 	} else if params.DrawdownOrder == PensionToISA {
-		// Over-draw pension to fill tax bands, excess goes to ISA
+		// Over-draw pension to fill tax bands, excess goes to ISA (only when income needed)
 		return ExecutePensionToISADrawdown(people, netNeeded, params.CrystallisationStrategy, year, statePensionByPerson, taxBands, params.MaximizeCoupleISA)
+	} else if params.DrawdownOrder == PensionToISAProactive {
+		// Extract pension to fill tax bands even when work income covers expenses
+		return ExecutePensionToISAProactiveDrawdown(people, netNeeded, params.CrystallisationStrategy, year, statePensionByPerson, taxBands, params.MaximizeCoupleISA)
 	} else if params.DrawdownOrder == PensionOnly {
 		// Only use pension, never touch ISAs
 		withdrawFromPensionGrossedUp(people, remaining, params.CrystallisationStrategy, year, &breakdown, statePensionByPerson, taxBands)
@@ -746,6 +749,170 @@ func ExecutePensionToISADrawdown(people []*Person, netNeeded float64, strategy S
 	return breakdown
 }
 
+// ExecutePensionToISAProactiveDrawdown extracts pension to fill tax bands even when work income covers expenses
+// This is useful for maximizing tax-efficient pension-to-ISA transfers while still employed
+// Key difference from ExecutePensionToISADrawdown: works even when netNeeded <= 0
+func ExecutePensionToISAProactiveDrawdown(people []*Person, netNeeded float64, strategy Strategy, year int, taxableIncomeByPerson map[string]float64, taxBands []TaxBand, maximizeCoupleISA bool) WithdrawalBreakdown {
+	breakdown := NewWithdrawalBreakdown()
+
+	// Get personal allowance and basic rate limit from (inflated) tax bands
+	personalAllowance := 12570.0 // Default fallback
+	basicRateLimit := 50270.0    // Default fallback
+
+	if len(taxBands) > 0 && taxBands[0].Rate == 0 {
+		personalAllowance = taxBands[0].Upper
+	}
+	if len(taxBands) > 1 && taxBands[1].Rate == 0.20 {
+		basicRateLimit = taxBands[1].Upper
+	}
+
+	// For each person, calculate how much pension to withdraw to fill remaining tax band space
+	for _, p := range people {
+		if !p.CanAccessPension(year) {
+			continue
+		}
+
+		// Get existing taxable income (includes state pension, DB pension, work income, part-time)
+		existingTaxableIncome := taxableIncomeByPerson[p.Name]
+
+		// Calculate space available in each band after existing income
+		personalAllowanceSpace := math.Max(0, personalAllowance-existingTaxableIncome)
+		basicRateSpace := math.Max(0, basicRateLimit-math.Max(existingTaxableIncome, personalAllowance))
+
+		// Target: fill personal allowance and basic rate band
+		targetTaxableWithdrawal := personalAllowanceSpace + basicRateSpace
+
+		// Also check if we have ISA allowance space - no point extracting if we can't deposit
+		if p.ISAAnnualLimit <= 0 {
+			continue
+		}
+
+		if targetTaxableWithdrawal <= 0 {
+			continue
+		}
+
+		// Calculate how much we need to crystallise/withdraw to get this taxable amount
+		var amountToCrystallise float64
+		if p.PCLSTaken {
+			amountToCrystallise = targetTaxableWithdrawal
+		} else {
+			// 25% tax-free, 75% taxable
+			amountToCrystallise = targetTaxableWithdrawal / 0.75
+		}
+
+		if amountToCrystallise > p.UncrystallisedPot {
+			amountToCrystallise = p.UncrystallisedPot
+		}
+
+		if amountToCrystallise > 0 {
+			result := GradualCrystallise(p, amountToCrystallise)
+			breakdown.TaxFreeFromPension[p.Name] += result.TaxFreePortion
+			breakdown.TotalTaxFree += result.TaxFreePortion
+			breakdown.TaxableFromPension[p.Name] += result.TaxablePortion
+			breakdown.TotalTaxable += result.TaxablePortion
+		}
+
+		// Also withdraw from crystallised pot if available
+		if p.CrystallisedPot > 0 && breakdown.TaxableFromPension[p.Name] < targetTaxableWithdrawal {
+			needed := targetTaxableWithdrawal - breakdown.TaxableFromPension[p.Name]
+			withdrawal := math.Min(needed, p.CrystallisedPot)
+			if withdrawal > 0 {
+				actual := WithdrawFromCrystallised(p, withdrawal)
+				breakdown.TaxableFromPension[p.Name] += actual
+				breakdown.TotalTaxable += actual
+			}
+		}
+	}
+
+	// Calculate gross withdrawn and tax paid
+	totalGrossWithdrawn := breakdown.TotalTaxFree + breakdown.TotalTaxable
+	totalTaxPaid := 0.0
+	for _, p := range people {
+		existingTaxable := taxableIncomeByPerson[p.Name]
+		taxableWithdrawal := breakdown.TaxableFromPension[p.Name]
+		totalIncome := existingTaxable + taxableWithdrawal
+		// Tax on combined income minus tax already paid on existing income
+		totalTaxPaid += CalculateTaxOnIncome(totalIncome, taxBands) - CalculateTaxOnIncome(existingTaxable, taxBands)
+	}
+
+	// Net from pension = gross - additional tax
+	netFromPension := totalGrossWithdrawn - totalTaxPaid
+
+	// Calculate excess to deposit to ISA
+	// If netNeeded > 0, excess = net - needed
+	// If netNeeded <= 0, all of net goes to ISA (we didn't need income)
+	var excess float64
+	if netNeeded > 0 {
+		excess = netFromPension - netNeeded
+	} else {
+		excess = netFromPension
+	}
+
+	if excess > 0 {
+		// Distribute excess to ISAs (up to annual limit per person)
+		remainingExcess := excess
+		for _, p := range people {
+			if remainingExcess <= 0 {
+				break
+			}
+			isaDeposit := remainingExcess / float64(len(people))
+			if isaDeposit > p.ISAAnnualLimit {
+				isaDeposit = p.ISAAnnualLimit
+			}
+			p.TaxFreeSavings += isaDeposit
+			breakdown.ISADeposits[p.Name] = isaDeposit
+			breakdown.TotalISADeposits += isaDeposit
+			remainingExcess -= isaDeposit
+		}
+		// Second pass for remaining excess
+		for _, p := range people {
+			if remainingExcess <= 0 {
+				break
+			}
+			spaceLeft := p.ISAAnnualLimit - breakdown.ISADeposits[p.Name]
+			if spaceLeft > 0 {
+				additional := math.Min(remainingExcess, spaceLeft)
+				p.TaxFreeSavings += additional
+				breakdown.ISADeposits[p.Name] += additional
+				breakdown.TotalISADeposits += additional
+				remainingExcess -= additional
+			}
+		}
+	}
+
+	// If we still need income (netNeeded > 0 and excess < 0), cover shortfall from ISA
+	if netNeeded > 0 && netFromPension < netNeeded {
+		shortfall := netNeeded - netFromPension
+
+		totalISA := 0.0
+		for _, p := range people {
+			totalISA += p.TaxFreeSavings
+		}
+
+		if totalISA > 0 {
+			isaNeeded := math.Min(shortfall, totalISA)
+			for _, p := range people {
+				if p.TaxFreeSavings > 0 {
+					share := p.TaxFreeSavings / totalISA
+					withdrawal := math.Min(isaNeeded*share, p.TaxFreeSavings)
+					actual := WithdrawFromISA(p, withdrawal)
+					breakdown.TaxFreeFromISA[p.Name] += actual
+					breakdown.TotalTaxFree += actual
+					shortfall -= actual
+				}
+			}
+		}
+
+		// If still short, draw more from pension
+		if shortfall > 1 {
+			_ = withdrawFromPensionGrossedUp(people, shortfall, strategy, year,
+				&breakdown, taxableIncomeByPerson, taxBands)
+		}
+	}
+
+	return breakdown
+}
+
 // ExecuteFillBasicRateDrawdown withdraws from pension to fill the basic rate band exactly
 // This crystallizes tax at 20% now rather than potentially 40% later
 // Any excess goes to ISA, shortfall is covered from ISA
@@ -1005,41 +1172,18 @@ func ExecuteStatePensionBridgeDrawdown(people []*Person, netNeeded float64, stra
 // GetStrategiesForConfig returns the appropriate simulation strategies based on config
 // If there's no mortgage, only returns strategies with MortgageNormal (no point testing different payoff options)
 func GetStrategiesForConfig(config *Config) []SimulationParams {
-	if config.HasMortgage() {
-		// Full set of strategies with all mortgage options
+	if !config.HasMortgage() {
+		// No mortgage - only test drawdown order strategies (mortgage options are irrelevant)
 		return []SimulationParams{
-			// === GRADUAL CRYSTALLISATION STRATEGIES ===
-			// Early payoff strategies
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageEarly},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageEarly},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageEarly},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageEarly},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageEarly},
-			// Normal payoff strategies
+			// Gradual Crystallisation
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISAProactive, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
-			// Extended (+10 years) payoff strategies
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageExtended},
-			// PCLS mortgage payoff (use 25% lump sum, no further tax-free)
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: PCLSMortgagePayoff},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: PCLSMortgagePayoff},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: PCLSMortgagePayoff},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: PCLSMortgagePayoff},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: PCLSMortgagePayoff},
-
-			// === UFPLS STRATEGIES (25% tax-free on each withdrawal) ===
-			// Normal payoff only for UFPLS to keep combinations manageable
+			// UFPLS
 			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
 			{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
@@ -1048,22 +1192,42 @@ func GetStrategiesForConfig(config *Config) []SimulationParams {
 		}
 	}
 
-	// No mortgage - only test drawdown order strategies (mortgage options are irrelevant)
-	return []SimulationParams{
-		// Gradual Crystallisation
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
-		// UFPLS
-		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: SavingsFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: PensionFirst, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: TaxOptimized, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: FillBasicRate, MortgageOpt: MortgageNormal},
-		{CrystallisationStrategy: UFPLSStrategy, DrawdownOrder: StatePensionBridge, MortgageOpt: MortgageNormal},
+	// Has mortgage - build strategies based on allowed mortgage options
+	drawdownOrders := []DrawdownOrder{
+		SavingsFirst, PensionFirst, TaxOptimized, PensionToISA,
+		PensionToISAProactive, FillBasicRate, StatePensionBridge,
 	}
+
+	// Determine which mortgage options to include
+	mortgageOpts := []MortgageOption{MortgageEarly, MortgageNormal, PCLSMortgagePayoff}
+	if config.ShouldIncludeExtendedMortgage() {
+		mortgageOpts = []MortgageOption{MortgageEarly, MortgageNormal, MortgageExtended, PCLSMortgagePayoff}
+	}
+
+	var strategies []SimulationParams
+
+	// Gradual Crystallisation with all mortgage options
+	for _, mortOpt := range mortgageOpts {
+		for _, drawdown := range drawdownOrders {
+			strategies = append(strategies, SimulationParams{
+				CrystallisationStrategy: GradualCrystallisation,
+				DrawdownOrder:           drawdown,
+				MortgageOpt:             mortOpt,
+			})
+		}
+	}
+
+	// UFPLS with Normal mortgage only (to keep combinations manageable)
+	ufplsDrawdowns := []DrawdownOrder{SavingsFirst, PensionFirst, TaxOptimized, FillBasicRate, StatePensionBridge}
+	for _, drawdown := range ufplsDrawdowns {
+		strategies = append(strategies, SimulationParams{
+			CrystallisationStrategy: UFPLSStrategy,
+			DrawdownOrder:           drawdown,
+			MortgageOpt:             MortgageNormal,
+		})
+	}
+
+	return strategies
 }
 
 // GetDepletionStrategiesForConfig returns strategies for depletion mode
@@ -1074,30 +1238,343 @@ func GetDepletionStrategiesForConfig(config *Config) []SimulationParams {
 
 // GetPensionOnlyStrategiesForConfig returns strategies for pension-only mode
 func GetPensionOnlyStrategiesForConfig(config *Config) []SimulationParams {
-	if config.HasMortgage() {
+	if !config.HasMortgage() {
 		return []SimulationParams{
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageNormal},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: PCLSMortgagePayoff},
 		}
 	}
-	return []SimulationParams{
+
+	strategies := []SimulationParams{
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageEarly},
 		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageNormal},
+		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: PCLSMortgagePayoff},
 	}
+	if config.ShouldIncludeExtendedMortgage() {
+		strategies = append(strategies,
+			SimulationParams{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionOnly, MortgageOpt: MortgageExtended},
+		)
+	}
+	return strategies
 }
 
 // GetPensionToISAStrategiesForConfig returns strategies for pension-to-ISA mode
 func GetPensionToISAStrategiesForConfig(config *Config) []SimulationParams {
-	if config.HasMortgage() {
+	if !config.HasMortgage() {
 		return []SimulationParams{
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageEarly},
 			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageExtended},
-			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: PCLSMortgagePayoff},
+			{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISAProactive, MortgageOpt: MortgageNormal},
 		}
 	}
-	return []SimulationParams{
-		{CrystallisationStrategy: GradualCrystallisation, DrawdownOrder: PensionToISA, MortgageOpt: MortgageNormal},
+
+	// Base mortgage options
+	mortgageOpts := []MortgageOption{MortgageEarly, MortgageNormal, PCLSMortgagePayoff}
+	if config.ShouldIncludeExtendedMortgage() {
+		mortgageOpts = []MortgageOption{MortgageEarly, MortgageNormal, MortgageExtended, PCLSMortgagePayoff}
 	}
+
+	var strategies []SimulationParams
+	for _, mortOpt := range mortgageOpts {
+		// Standard PensionToISA (only extracts when income needed)
+		strategies = append(strategies, SimulationParams{
+			CrystallisationStrategy: GradualCrystallisation,
+			DrawdownOrder:           PensionToISA,
+			MortgageOpt:             mortOpt,
+		})
+		// Proactive PensionToISA (extracts even when work income covers expenses)
+		strategies = append(strategies, SimulationParams{
+			CrystallisationStrategy: GradualCrystallisation,
+			DrawdownOrder:           PensionToISAProactive,
+			MortgageOpt:             mortOpt,
+		})
+	}
+	return strategies
+}
+
+// GetISAToSIPPStrategiesForConfig returns strategies with ISA to SIPP pre-retirement transfers enabled
+// This is the reverse of PensionToISA: while working, move ISA money into pension to get tax relief
+// The idea is to get tax relief at your marginal rate now, then withdraw later when potentially in lower bracket
+// Note: Only works for DC pensions/SIPPs, not DB pensions like Teachers Pension
+func GetISAToSIPPStrategiesForConfig(config *Config) []SimulationParams {
+	drawdowns := []DrawdownOrder{TaxOptimized, PensionFirst, SavingsFirst, FillBasicRate, StatePensionBridge}
+
+	if !config.HasMortgage() {
+		var strategies []SimulationParams
+		for _, drawdown := range drawdowns {
+			strategies = append(strategies, SimulationParams{
+				CrystallisationStrategy: GradualCrystallisation,
+				DrawdownOrder:           drawdown,
+				MortgageOpt:             MortgageNormal,
+				ISAToSIPPEnabled:        true,
+			})
+		}
+		return strategies
+	}
+
+	// With mortgage - include relevant mortgage options
+	mortgageOpts := []MortgageOption{MortgageNormal, MortgageEarly}
+	if config.ShouldIncludeExtendedMortgage() {
+		mortgageOpts = append(mortgageOpts, MortgageExtended)
+	}
+
+	var strategies []SimulationParams
+	for _, mortOpt := range mortgageOpts {
+		for _, drawdown := range drawdowns {
+			strategies = append(strategies, SimulationParams{
+				CrystallisationStrategy: GradualCrystallisation,
+				DrawdownOrder:           drawdown,
+				MortgageOpt:             mortOpt,
+				ISAToSIPPEnabled:        true,
+			})
+		}
+	}
+	return strategies
+}
+
+// HasISAToSIPPEnabled checks if any person in the config has ISA to SIPP transfers enabled
+func HasISAToSIPPEnabled(config *Config) bool {
+	for _, p := range config.People {
+		if p.ISAToSIPPEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+// GetAllStrategiesIncludingISAToSIPP returns all strategies including ISA to SIPP variants
+// This is useful when you want to compare with and without ISA to SIPP
+func GetAllStrategiesIncludingISAToSIPP(config *Config) []SimulationParams {
+	strategies := GetStrategiesForConfig(config)
+	isaToSIPPStrategies := GetISAToSIPPStrategiesForConfig(config)
+	return append(strategies, isaToSIPPStrategies...)
+}
+
+// =============================================================================
+// Strategy Permutation Engine V2
+// =============================================================================
+
+// Constraint represents a rule that invalidates certain combinations
+type Constraint struct {
+	ID          string
+	Description string
+	Validate    func(combo StrategyCombo) bool // Returns false if invalid
+}
+
+// DefaultConstraints returns the standard constraints for strategy combinations
+func DefaultConstraints() []Constraint {
+	return []Constraint{
+		{
+			ID:          "maximize_isa_only_pension_to_isa",
+			Description: "MaximizeCoupleISA only applies to PensionToISA strategies",
+			Validate: func(combo StrategyCombo) bool {
+				maxVal, maxOK := combo.Values[FactorMaximizeCoupleISA]
+				if !maxOK {
+					return true
+				}
+				maximize, _ := maxVal.Value.(bool)
+				if !maximize {
+					return true
+				}
+				drawdownVal, drawOK := combo.Values[FactorDrawdown]
+				if !drawOK {
+					return true
+				}
+				drawdown, _ := drawdownVal.Value.(DrawdownOrder)
+				return drawdown == PensionToISA || drawdown == PensionToISAProactive
+			},
+		},
+		{
+			ID:          "pension_only_no_maximize_isa",
+			Description: "PensionOnly strategy cannot use MaximizeCoupleISA",
+			Validate: func(combo StrategyCombo) bool {
+				drawdownVal, drawOK := combo.Values[FactorDrawdown]
+				if !drawOK {
+					return true
+				}
+				drawdown, _ := drawdownVal.Value.(DrawdownOrder)
+				if drawdown != PensionOnly {
+					return true
+				}
+				maxVal, maxOK := combo.Values[FactorMaximizeCoupleISA]
+				if !maxOK {
+					return true
+				}
+				maximize, _ := maxVal.Value.(bool)
+				return !maximize
+			},
+		},
+		{
+			ID:          "isa_to_sipp_not_with_pension_to_isa",
+			Description: "ISA to SIPP and PensionToISA are contradictory strategies",
+			Validate: func(combo StrategyCombo) bool {
+				isaToSippVal, isaOK := combo.Values[FactorISAToSIPP]
+				if !isaOK {
+					return true
+				}
+				isaToSipp, _ := isaToSippVal.Value.(bool)
+				if !isaToSipp {
+					return true
+				}
+				drawdownVal, drawOK := combo.Values[FactorDrawdown]
+				if !drawOK {
+					return true
+				}
+				drawdown, _ := drawdownVal.Value.(DrawdownOrder)
+				return drawdown != PensionToISA && drawdown != PensionToISAProactive
+			},
+		},
+		{
+			ID:          "ufpls_not_with_pcls_payoff",
+			Description: "UFPLS strategy cannot use PCLS mortgage payoff",
+			Validate: func(combo StrategyCombo) bool {
+				crystVal, crystOK := combo.Values[FactorCrystallisation]
+				if !crystOK {
+					return true
+				}
+				cryst, _ := crystVal.Value.(Strategy)
+				if cryst != UFPLSStrategy {
+					return true
+				}
+				mortgageVal, mortOK := combo.Values[FactorMortgage]
+				if !mortOK {
+					return true
+				}
+				mortgage, _ := mortgageVal.Value.(MortgageOption)
+				return mortgage != PCLSMortgagePayoff
+			},
+		},
+	}
+}
+
+// CombinationGenerator generates valid strategy combinations
+type CombinationGenerator struct {
+	registry    *FactorRegistry
+	constraints []Constraint
+	config      *Config
+}
+
+// NewCombinationGenerator creates a new generator for the given config
+func NewCombinationGenerator(config *Config) *CombinationGenerator {
+	return &CombinationGenerator{
+		registry:    NewFactorRegistry(),
+		constraints: DefaultConstraints(),
+		config:      config,
+	}
+}
+
+// GenerateCombinations generates all valid combinations for a mode
+func (g *CombinationGenerator) GenerateCombinations(mode PermutationMode) []StrategyCombo {
+	// Get factors filtered by mode
+	factors := g.registry.GetFactorsByMode(g.config, mode)
+
+	// Generate all combinations (cartesian product)
+	allCombos := g.cartesianProduct(factors)
+
+	// Filter by constraints
+	validCombos := make([]StrategyCombo, 0)
+	for _, combo := range allCombos {
+		if g.isValid(combo) {
+			validCombos = append(validCombos, combo)
+		}
+	}
+
+	return validCombos
+}
+
+// cartesianProduct generates all combinations of factor values
+func (g *CombinationGenerator) cartesianProduct(factors []*Factor) []StrategyCombo {
+	if len(factors) == 0 {
+		return []StrategyCombo{{Values: make(map[FactorID]FactorValue)}}
+	}
+
+	result := make([]StrategyCombo, 0)
+
+	// Start with first factor
+	for _, val := range factors[0].Values {
+		combo := StrategyCombo{Values: make(map[FactorID]FactorValue)}
+		combo.Values[factors[0].ID] = val
+		result = append(result, combo)
+	}
+
+	// Extend with remaining factors
+	for i := 1; i < len(factors); i++ {
+		newResult := make([]StrategyCombo, 0)
+		for _, existingCombo := range result {
+			for _, val := range factors[i].Values {
+				newCombo := existingCombo.Clone()
+				newCombo.Values[factors[i].ID] = val
+				newResult = append(newResult, newCombo)
+			}
+		}
+		result = newResult
+	}
+
+	return result
+}
+
+// isValid checks if a combination passes all constraints
+func (g *CombinationGenerator) isValid(combo StrategyCombo) bool {
+	for _, constraint := range g.constraints {
+		if !constraint.Validate(combo) {
+			return false
+		}
+	}
+	return true
+}
+
+// ToSimulationParams converts a StrategyCombo to SimulationParams
+func (combo StrategyCombo) ToSimulationParams() SimulationParams {
+	params := SimulationParams{}
+
+	if v, ok := combo.Values[FactorCrystallisation]; ok {
+		params.CrystallisationStrategy, _ = v.Value.(Strategy)
+	}
+	if v, ok := combo.Values[FactorDrawdown]; ok {
+		params.DrawdownOrder, _ = v.Value.(DrawdownOrder)
+	}
+	if v, ok := combo.Values[FactorMortgage]; ok {
+		params.MortgageOpt, _ = v.Value.(MortgageOption)
+	} else {
+		params.MortgageOpt = MortgageNormal // Default when no mortgage factor
+	}
+	if v, ok := combo.Values[FactorMaximizeCoupleISA]; ok {
+		params.MaximizeCoupleISA, _ = v.Value.(bool)
+	}
+	if v, ok := combo.Values[FactorISAToSIPP]; ok {
+		params.ISAToSIPPEnabled, _ = v.Value.(bool)
+	}
+	if v, ok := combo.Values[FactorGuardrails]; ok {
+		params.GuardrailsEnabled, _ = v.Value.(bool)
+	}
+	if v, ok := combo.Values[FactorStatePensionDefer]; ok {
+		params.StatePensionDeferYears, _ = v.Value.(int)
+	}
+
+	params.SourceCombo = &combo
+	return params
+}
+
+// GetStrategiesForConfigV2 generates strategy combinations using the new permutation engine
+func GetStrategiesForConfigV2(config *Config, mode PermutationMode) []SimulationParams {
+	generator := NewCombinationGenerator(config)
+	combos := generator.GenerateCombinations(mode)
+
+	params := make([]SimulationParams, len(combos))
+	for i, combo := range combos {
+		params[i] = combo.ToSimulationParams()
+	}
+
+	return params
+}
+
+// GetCombinationCount returns the expected number of combinations for each mode
+func GetCombinationCount(config *Config) map[PermutationMode]int {
+	counts := make(map[PermutationMode]int)
+	generator := NewCombinationGenerator(config)
+
+	for _, mode := range []PermutationMode{ModeQuick, ModeStandard, ModeThorough, ModeComprehensive} {
+		combos := generator.GenerateCombinations(mode)
+		counts[mode] = len(combos)
+	}
+
+	return counts
 }

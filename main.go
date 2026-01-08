@@ -298,14 +298,15 @@ func runConsoleMode(configFile string, showDetails, showDrawdown bool, yearDetai
 		annualPayment := config.GetTotalAnnualPayment()
 		earlyPayoff := config.GetTotalPayoffAmount(config.Mortgage.EarlyPayoffYear)
 		normalPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear)
-		extendedPayoff := config.GetTotalPayoffAmount(config.Mortgage.EndYear + 10)
+		extendedEndYear := config.GetExtendedEndYear()
+		extendedPayoff := config.GetTotalPayoffAmount(extendedEndYear)
 		fmt.Println("  Mortgage Options:")
 		fmt.Printf("    Early: Pay £%.0f/year until %d, then £%.0fk payoff\n",
 			annualPayment, config.Mortgage.EarlyPayoffYear, earlyPayoff/1000)
 		fmt.Printf("    Normal: Pay £%.0f/year until %d, then £%.0fk payoff\n",
 			annualPayment, config.Mortgage.EndYear, normalPayoff/1000)
 		fmt.Printf("    Extended: Pay £%.0f/year until %d, then £%.0fk payoff\n",
-			annualPayment, config.Mortgage.EndYear+10, extendedPayoff/1000)
+			annualPayment, extendedEndYear, extendedPayoff/1000)
 		fmt.Println()
 	} else {
 		fmt.Println("Running 4 scenarios (no mortgage)...")

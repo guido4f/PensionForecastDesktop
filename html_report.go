@@ -128,6 +128,103 @@ func getGrowthDeclineHTML(config *Config) string {
 	return "" // No growth decline
 }
 
+// getYearEvents returns a slice of event descriptions for a given year
+// Each event includes the person's name it applies to
+func getYearEvents(year YearState, config *Config, mortgagePayoffYear int, prevYearState *YearState) []string {
+	var events []string
+
+	for _, pc := range config.People {
+		name := pc.Name
+		age := year.Ages[name]
+
+		// Get retirement info
+		retirementTaxYear, retirementAge := pc.GetRetirementInfo()
+
+		// Retirement (stop working) - check if this is the first year of retirement
+		if year.Year == retirementTaxYear {
+			events = append(events, fmt.Sprintf("%s retires", name))
+		}
+
+		// Pension access starts - check if this is the first year they can access pension
+		pensionAccessAge := pc.PensionAccessAge
+		if pensionAccessAge <= 0 {
+			pensionAccessAge = retirementAge
+		}
+		if age == pensionAccessAge {
+			// Only show if they have a pension
+			if pc.Pension > 0 {
+				events = append(events, fmt.Sprintf("%s pension access", name))
+			}
+		}
+
+		// State pension starts
+		if age == pc.StatePensionAge {
+			events = append(events, fmt.Sprintf("%s state pension", name))
+		}
+
+		// DB pension starts
+		if pc.DBPensionAmount > 0 && pc.DBPensionStartAge > 0 && age == pc.DBPensionStartAge {
+			dbName := pc.DBPensionName
+			if dbName == "" {
+				dbName = "DB pension"
+			}
+			events = append(events, fmt.Sprintf("%s %s", name, dbName))
+		}
+
+		// Part-time work starts
+		if pc.PartTimeIncome > 0 && age == pc.PartTimeStartAge {
+			events = append(events, fmt.Sprintf("%s part-time start", name))
+		}
+
+		// Part-time work ends
+		if pc.PartTimeIncome > 0 && age == pc.PartTimeEndAge {
+			events = append(events, fmt.Sprintf("%s part-time ends", name))
+		}
+
+		// Pension depleted - check if pension was depleted this year
+		if prevYearState != nil {
+			prevBal := prevYearState.EndBalances[name]
+			currBal := year.EndBalances[name]
+			prevPension := prevBal.CrystallisedPot + prevBal.UncrystallisedPot
+			currPension := currBal.CrystallisedPot + currBal.UncrystallisedPot
+			if prevPension > 0 && currPension <= 0 {
+				events = append(events, fmt.Sprintf("%s pension depleted", name))
+			}
+		}
+
+		// ISA depleted
+		if prevYearState != nil {
+			prevISA := prevYearState.EndBalances[name].TaxFreeSavings
+			currISA := year.EndBalances[name].TaxFreeSavings
+			if prevISA > 0 && currISA <= 0 {
+				events = append(events, fmt.Sprintf("%s ISA depleted", name))
+			}
+		}
+	}
+
+	// Mortgage payoff (not person-specific)
+	if year.Year == mortgagePayoffYear && mortgagePayoffYear > 0 {
+		events = append(events, "Mortgage paid off")
+	}
+
+	return events
+}
+
+// formatEvents formats a slice of events as HTML for display in a table cell
+func formatEvents(events []string) string {
+	if len(events) == 0 {
+		return "-"
+	}
+	result := ""
+	for i, event := range events {
+		if i > 0 {
+			result += "<br>"
+		}
+		result += fmt.Sprintf(`<span class="event-tag">%s</span>`, event)
+	}
+	return result
+}
+
 // GenerateHTMLReport generates an HTML detailed report for a simulation result
 func GenerateHTMLReport(result SimulationResult, config *Config, filename string) error {
 	f, err := os.Create(filename)
@@ -237,6 +334,8 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
         th:first-child, td:first-child { text-align: left; }
         tr:hover { background: #f1f5f9; }
         .highlight { background: #fef3c7 !important; }
+        .event-tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin: 1px 0; white-space: nowrap; }
+        .events-cell { text-align: left !important; min-width: 140px; }
         .negative { color: var(--danger); }
         .positive { color: var(--success); }
         .balance-row {
@@ -474,6 +573,7 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
                 <table>
                     <tr>
                         <th>Tax Year</th>
+                        <th>Events</th>
 `)
 	for _, name := range names {
 		fmt.Fprintf(f, "                        <th>%s Age</th>\n", name)
@@ -481,6 +581,7 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 	fmt.Fprintf(f, `                        <th>Required</th>
                         <th>State Pen</th>
                         <th>DB Pen</th>
+                        <th>Work Inc</th>
                         <th>Tax-Free</th>
                         <th>Taxable</th>
                         <th>Tax Paid</th>
@@ -500,25 +601,33 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 		mortgagePayoffYear = config.Mortgage.EarlyPayoffYear
 	}
 
-	// Calculate colspan for details row (Year + ages + 8 columns + 2 per person for balances)
-	colspan := 1 + len(names) + 8 + len(names)*2
+	// Calculate colspan for details row (Year + Events + ages + 9 columns + 2 per person for balances)
+	colspan := 2 + len(names) + 9 + len(names)*2
 
-	for _, year := range result.Years {
+	// Track previous year state for depletion detection
+	var prevYearState *YearState
+
+	for i, year := range result.Years {
 		highlightClass := ""
 		if year.Year == mortgagePayoffYear {
 			highlightClass = " highlight"
 		}
 
+		// Get events for this year
+		events := getYearEvents(year, config, mortgagePayoffYear, prevYearState)
+
 		// Main row (clickable)
 		fmt.Fprintf(f, `                    <tr id="row-%d" class="expandable-row%s" onclick="toggleYear(%d)">
 `, year.Year, highlightClass, year.Year)
 		fmt.Fprintf(f, "                        <td>%s</td>\n", year.TaxYearLabel)
+		fmt.Fprintf(f, "                        <td class=\"events-cell\">%s</td>\n", formatEvents(events))
 		for _, name := range names {
 			fmt.Fprintf(f, "                        <td>%d</td>\n", year.Ages[name])
 		}
 		fmt.Fprintf(f, "                        <td>%s</td>\n", FormatMoney(year.TotalRequired))
 		fmt.Fprintf(f, "                        <td>%s</td>\n", FormatMoney(year.TotalStatePension))
 		fmt.Fprintf(f, "                        <td>%s</td>\n", formatOrDash(year.TotalDBPension))
+		fmt.Fprintf(f, "                        <td>%s</td>\n", formatOrDash(year.TotalWorkIncome))
 		fmt.Fprintf(f, "                        <td>%s</td>\n", FormatMoney(year.Withdrawals.TotalTaxFree))
 		fmt.Fprintf(f, "                        <td>%s</td>\n", FormatMoney(year.Withdrawals.TotalTaxable))
 		fmt.Fprintf(f, "                        <td class=\"negative\">%s</td>\n", FormatMoney(year.TotalTaxPaid))
@@ -530,6 +639,9 @@ func GenerateHTMLReport(result SimulationResult, config *Config, filename string
 			fmt.Fprintf(f, "                        <td>%s</td>\n", FormatMoney(bal.CrystallisedPot+bal.UncrystallisedPot))
 		}
 		fmt.Fprintf(f, "                    </tr>\n")
+
+		// Update previous year state
+		prevYearState = &result.Years[i]
 
 		// Details row (hidden by default)
 		fmt.Fprintf(f, `                    <tr id="details-%d" class="year-details">
@@ -770,6 +882,8 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
         th:first-child, td:first-child { text-align: left; }
         tr:hover { background: #f1f5f9; }
         .highlight { background: #fef3c7 !important; }
+        .event-tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin: 1px 0; white-space: nowrap; }
+        .events-cell { text-align: left !important; min-width: 140px; }
         .negative { color: var(--danger); }
         .positive { color: var(--success); }
         .balance-row { background: var(--bg); font-weight: 600; }
@@ -1079,6 +1193,7 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
                     <table>
                         <tr>
                             <th>Year</th>
+                            <th>Events</th>
 `)
 		for _, name := range names {
 			fmt.Fprintf(f, "                            <th>%s</th>\n", name)
@@ -1086,6 +1201,7 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
 		fmt.Fprintf(f, `                            <th>Required</th>
                             <th>State Pen</th>
                             <th>DB Pen</th>
+                            <th>Work Inc</th>
                             <th>Tax-Free</th>
                             <th>Taxable</th>
                             <th>Tax</th>
@@ -1105,14 +1221,20 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
 			mortgagePayoffYear = config.Mortgage.EarlyPayoffYear
 		}
 
-		// Calculate colspan for details row
-		colspan := 1 + len(names) + 8 + len(names)*2
+		// Calculate colspan for details row (Year + Events + ages + 9 columns + 2 per person for balances)
+		colspan := 2 + len(names) + 9 + len(names)*2
 
-		for _, year := range result.Years {
+		// Track previous year state for depletion detection
+		var prevYearState *YearState
+
+		for j, year := range result.Years {
 			highlightClass := ""
 			if year.Year == mortgagePayoffYear {
 				highlightClass = " highlight"
 			}
+
+			// Get events for this year
+			events := getYearEvents(year, config, mortgagePayoffYear, prevYearState)
 
 			// Use unique IDs for combined report (include strategy index)
 			rowID := fmt.Sprintf("s%d-%d", i, year.Year)
@@ -1121,12 +1243,14 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
 			fmt.Fprintf(f, `                        <tr id="row-%s" class="expandable-row%s" onclick="toggleYear('%s')">
 `, rowID, highlightClass, rowID)
 			fmt.Fprintf(f, "                            <td>%s</td>\n", year.TaxYearLabel)
+			fmt.Fprintf(f, "                            <td class=\"events-cell\">%s</td>\n", formatEvents(events))
 			for _, name := range names {
 				fmt.Fprintf(f, "                            <td>%d</td>\n", year.Ages[name])
 			}
 			fmt.Fprintf(f, "                            <td>%s</td>\n", FormatMoney(year.TotalRequired))
 			fmt.Fprintf(f, "                            <td>%s</td>\n", FormatMoney(year.TotalStatePension))
 			fmt.Fprintf(f, "                            <td>%s</td>\n", formatOrDash(year.TotalDBPension))
+			fmt.Fprintf(f, "                            <td>%s</td>\n", formatOrDash(year.TotalWorkIncome))
 			fmt.Fprintf(f, "                            <td>%s</td>\n", FormatMoney(year.Withdrawals.TotalTaxFree))
 			fmt.Fprintf(f, "                            <td>%s</td>\n", FormatMoney(year.Withdrawals.TotalTaxable))
 			fmt.Fprintf(f, "                            <td class=\"negative\">%s</td>\n", FormatMoney(year.TotalTaxPaid))
@@ -1138,6 +1262,9 @@ func GenerateCombinedHTMLReport(results []SimulationResult, config *Config, file
 				fmt.Fprintf(f, "                            <td>%s</td>\n", FormatMoney(bal.CrystallisedPot+bal.UncrystallisedPot))
 			}
 			fmt.Fprintf(f, "                        </tr>\n")
+
+			// Update previous year state
+			prevYearState = &result.Years[j]
 
 			// Details row (hidden by default)
 			fmt.Fprintf(f, `                        <tr id="details-%s" class="year-details">
@@ -1932,6 +2059,8 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
             color: var(--text);
         }
         .highlight { background: #fef3c7 !important; }
+        .event-tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin: 1px 0; white-space: nowrap; }
+        .events-cell { text-align: left !important; min-width: 140px; }
         .pension-depleted { background: #fee2e2 !important; border-left: 4px solid var(--danger); }
         .pension-depleted td:first-child::after { content: ' [Pension Depleted]'; color: var(--danger); font-weight: bold; font-size: 0.75rem; }
         .detail-table {
@@ -2096,6 +2225,7 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
                         <thead>
                             <tr>
                                 <th>Year</th>
+                                <th>Events</th>
 `)
 		for _, name := range names {
 			fmt.Fprintf(f, "                                <th>%s Age</th>\n", name)
@@ -2103,6 +2233,7 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
 		fmt.Fprintf(f, `                                <th>Required</th>
                                 <th>State Pension</th>
                                 <th>DB Pension</th>
+                                <th>Work Income</th>
                                 <th>Tax-Free</th>
                                 <th>Taxable</th>
                                 <th>Tax Paid</th>
@@ -2121,8 +2252,8 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
 			mortgagePayoffYear = config.Mortgage.EarlyPayoffYear
 		}
 
-		// Calculate colspan: Year + ages (len(names)) + 8 data columns
-		colspan := 1 + len(names) + 8
+		// Calculate colspan: Year + Events + ages (len(names)) + 9 data columns
+		colspan := 2 + len(names) + 9
 
 		// Track previous pension balances to detect depletion
 		prevPensionByPerson := make(map[string]float64)
@@ -2130,7 +2261,10 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
 			prevPensionByPerson[name] = 1.0 // Assume everyone starts with pension
 		}
 
-		for _, year := range result.Years {
+		// Track previous year state for event detection
+		var prevYearState *YearState
+
+		for j, year := range result.Years {
 			// Determine highlight class
 			highlightClass := ""
 			if year.Year == targetYear || year.Year == mortgagePayoffYear {
@@ -2153,24 +2287,32 @@ func generateDepletionCombinedReport(results []DepletionResult, config *Config, 
 				prevPensionByPerson[name] = bal.CrystallisedPot + bal.UncrystallisedPot
 			}
 
+			// Get events for this year
+			events := getYearEvents(year, config, mortgagePayoffYear, prevYearState)
+
 			rowID := fmt.Sprintf("s%d-%d", i, year.Year)
 
 			// Main row (clickable)
 			fmt.Fprintf(f, `                            <tr id="row-%s" class="expandable-row%s" onclick="toggleYear('%s')">
 `, rowID, highlightClass, rowID)
 			fmt.Fprintf(f, "                                <td>%s</td>\n", year.TaxYearLabel)
+			fmt.Fprintf(f, "                                <td class=\"events-cell\">%s</td>\n", formatEvents(events))
 			for _, name := range names {
 				fmt.Fprintf(f, "                                <td>%d</td>\n", year.Ages[name])
 			}
 			fmt.Fprintf(f, "                                <td>%s</td>\n", FormatMoney(year.TotalRequired))
 			fmt.Fprintf(f, "                                <td>%s</td>\n", FormatMoney(year.TotalStatePension))
 			fmt.Fprintf(f, "                                <td>%s</td>\n", formatOrDash(year.TotalDBPension))
+			fmt.Fprintf(f, "                                <td>%s</td>\n", formatOrDash(year.TotalWorkIncome))
 			fmt.Fprintf(f, "                                <td>%s</td>\n", FormatMoney(year.Withdrawals.TotalTaxFree))
 			fmt.Fprintf(f, "                                <td>%s</td>\n", FormatMoney(year.Withdrawals.TotalTaxable))
 			fmt.Fprintf(f, "                                <td class=\"negative\">%s</td>\n", FormatMoney(year.TotalTaxPaid))
 			fmt.Fprintf(f, "                                <td class=\"positive\">%s</td>\n", FormatMoney(year.NetIncomeReceived))
 			fmt.Fprintf(f, "                                <td>%s</td>\n", FormatMoney(year.TotalBalance))
 			fmt.Fprintf(f, "                            </tr>\n")
+
+			// Update previous year state
+			prevYearState = &result.Years[j]
 
 			// Detail row (hidden, expandable)
 			fmt.Fprintf(f, `                            <tr id="details-%s" class="year-details">

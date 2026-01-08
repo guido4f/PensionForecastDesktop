@@ -33,6 +33,10 @@ func runEmbeddedUI(configFile string) error {
 
 	w.SetTitle("Pension Forecast Simulator")
 	w.SetSize(1200, 800, webview.HintNone)
+
+	// Set window icon (Linux/GTK only)
+	SetWindowIcon(w.Window())
+
 	w.Navigate(url)
 
 	// Run blocks until window is closed

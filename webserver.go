@@ -36,6 +36,7 @@ func NewWebServer(config *Config, addr string) *WebServer {
 // APISimulationRequest represents a request to run a simulation
 type APISimulationRequest struct {
 	Mode              string   `json:"mode"`               // "fixed", "depletion", "pension-only", "pension-to-isa"
+	PermutationMode   string   `json:"permutation_mode"`   // "quick", "standard", "comprehensive" - controls strategy count
 	OptimizationGoal  string   `json:"optimization_goal"`  // "tax", "income", "balance"
 	People            []PersonConfig `json:"people"`
 	Financial         FinancialConfig `json:"financial"`
@@ -71,6 +72,7 @@ type GrowthDeclineInfo struct {
 // APIResultSummary is a simplified simulation result for API responses
 type APIResultSummary struct {
 	StrategyIdx    int                `json:"strategy_idx"`    // Original index for PDF export
+	Rank           int                `json:"rank"`            // Preference rank (1 = best)
 	Strategy       string             `json:"strategy"`
 	ShortName      string             `json:"short_name"`
 	TotalTaxPaid   float64            `json:"total_tax_paid"`
@@ -145,6 +147,7 @@ func (ws *WebServer) Start() error {
 	mux.HandleFunc("/api/export-pdf", ws.handleExportPDF)
 	mux.HandleFunc("/api/download-pdf", ws.handleDownloadPDF)
 	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
+	mux.HandleFunc("/api/open-file", ws.handleOpenFile)
 	mux.HandleFunc("/api/stock-indices", ws.handleStockIndices)
 
 	// Listen on the address (use :0 for auto-assign)
@@ -192,6 +195,7 @@ func (ws *WebServer) StartForEmbedded() (url string, cleanup func(), err error) 
 	mux.HandleFunc("/api/export-pdf", ws.handleExportPDF)
 	mux.HandleFunc("/api/download-pdf", ws.handleDownloadPDF)
 	mux.HandleFunc("/api/open-folder", ws.handleOpenFolder)
+	mux.HandleFunc("/api/open-file", ws.handleOpenFile)
 	mux.HandleFunc("/api/stock-indices", ws.handleStockIndices)
 
 	// Listen on the address (use :0 for auto-assign)
@@ -743,11 +747,11 @@ func (ws *WebServer) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	case "depletion":
 		response = ws.runDepletionSimulation(config, goal)
 	case "pension-only":
-		response = ws.runPensionOnlySimulation(config, goal)
+		response = ws.runPensionOnlySimulation(config, goal, req.PermutationMode)
 	case "pension-to-isa":
-		response = ws.runPensionToISASimulation(config, goal)
+		response = ws.runPensionToISASimulation(config, goal, req.PermutationMode)
 	default: // "fixed" or empty
-		response = ws.runFixedSimulation(config, goal)
+		response = ws.runFixedSimulation(config, goal, req.PermutationMode)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -775,7 +779,7 @@ func (ws *WebServer) handleSimulateFixed(w http.ResponseWriter, r *http.Request)
 	}
 
 	goal := parseOptimizationGoal(req.OptimizationGoal)
-	response := ws.runFixedSimulation(config, goal)
+	response := ws.runFixedSimulation(config, goal, req.PermutationMode)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -829,7 +833,7 @@ func (ws *WebServer) handleSimulatePensionOnly(w http.ResponseWriter, r *http.Re
 	}
 
 	goal := parseOptimizationGoal(req.OptimizationGoal)
-	response := ws.runPensionOnlySimulation(config, goal)
+	response := ws.runPensionOnlySimulation(config, goal, req.PermutationMode)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -856,7 +860,7 @@ func (ws *WebServer) handleSimulatePensionToISA(w http.ResponseWriter, r *http.R
 	}
 
 	goal := parseOptimizationGoal(req.OptimizationGoal)
-	response := ws.runPensionToISASimulation(config, goal)
+	response := ws.runPensionToISASimulation(config, goal, req.PermutationMode)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
@@ -1201,6 +1205,60 @@ func (ws *WebServer) handleOpenFolder(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleOpenFile opens a file directly with the system default application
+func (ws *WebServer) handleOpenFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req OpenFolderRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(req.FilePath); os.IsNotExist(err) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "File not found: " + req.FilePath,
+		})
+		return
+	}
+
+	// Open file with system default application based on OS
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", req.FilePath)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", "", req.FilePath)
+	default: // Linux and others
+		cmd = exec.Command("xdg-open", req.FilePath)
+	}
+
+	if err := cmd.Start(); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"message": "Failed to open file: " + err.Error(),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "File opened",
+	})
+}
+
 // StockIndicesResponse represents the response containing available stock indices
 type StockIndicesResponse struct {
 	Indices   []StockIndex       `json:"indices"`
@@ -1264,12 +1322,18 @@ func (ws *WebServer) handleExportPDF(w http.ResponseWriter, r *http.Request) {
 	// Build config using the standard method
 	config := ws.buildConfig(&req.APISimulationRequest)
 
-	// Get the strategies based on mode
+	// Get the strategies using the SAME function as the original simulation
+	// This is critical - using a different function would give different strategy indices
 	var strategies []SimulationParams
-	if req.Mode == "pension-to-isa" {
+	switch req.Mode {
+	case "depletion":
+		strategies = GetDepletionStrategiesForConfig(config)
+	case "pension-only":
+		strategies = GetPensionOnlyStrategiesForConfig(config)
+	case "pension-to-isa":
 		strategies = GetPensionToISAStrategiesForConfig(config)
-	} else {
-		strategies = GetStrategiesForConfig(config)
+	default: // "fixed"
+		strategies = getStrategiesWithMode(config, req.PermutationMode)
 	}
 	if req.StrategyIdx < 0 || req.StrategyIdx >= len(strategies) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1308,7 +1372,7 @@ func (ws *WebServer) handleExportPDF(w http.ResponseWriter, r *http.Request) {
 		pdfConfig.IncomeRequirements.MonthlyBeforeAge = depletionResult.MonthlyBeforeAge
 		pdfConfig.IncomeRequirements.MonthlyAfterAge = depletionResult.MonthlyAfterAge
 	} else {
-		result = RunSimulation(strategies[req.StrategyIdx], config)
+		result = RunSimulationV2(strategies[req.StrategyIdx], config)
 	}
 
 	// Generate the PDF
@@ -1379,15 +1443,21 @@ func (ws *WebServer) handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
 	// Build config using the standard method
 	config := ws.buildConfig(&req.APISimulationRequest)
 
-	// Get the strategies based on mode
+	// Get the strategies based on mode and permutation mode
+	// Must use the same strategy retrieval function as the original simulation
 	var strategies []SimulationParams
-	if req.Mode == "pension-to-isa" {
+	switch req.Mode {
+	case "depletion":
+		strategies = GetDepletionStrategiesForConfig(config)
+	case "pension-only":
+		strategies = GetPensionOnlyStrategiesForConfig(config)
+	case "pension-to-isa":
 		strategies = GetPensionToISAStrategiesForConfig(config)
-	} else {
-		strategies = GetStrategiesForConfig(config)
+	default: // "fixed"
+		strategies = getStrategiesWithMode(config, req.PermutationMode)
 	}
 	if req.StrategyIdx < 0 || req.StrategyIdx >= len(strategies) {
-		http.Error(w, fmt.Sprintf("Invalid strategy index: %d", req.StrategyIdx), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Invalid strategy index: %d (max: %d)", req.StrategyIdx, len(strategies)-1), http.StatusBadRequest)
 		return
 	}
 
@@ -1419,7 +1489,7 @@ func (ws *WebServer) handleDownloadPDF(w http.ResponseWriter, r *http.Request) {
 		pdfConfig.IncomeRequirements.MonthlyBeforeAge = depletionResult.MonthlyBeforeAge
 		pdfConfig.IncomeRequirements.MonthlyAfterAge = depletionResult.MonthlyAfterAge
 	} else {
-		result = RunSimulation(strategies[req.StrategyIdx], config)
+		result = RunSimulationV2(strategies[req.StrategyIdx], config)
 	}
 
 	// Generate the PDF
@@ -1451,9 +1521,218 @@ func parseOptimizationGoal(s string) OptimizationGoal {
 	}
 }
 
-func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
-	// Get strategies based on whether there's a mortgage
-	strategies := GetStrategiesForConfig(config)
+func parsePermutationMode(s string) PermutationMode {
+	switch s {
+	case "quick":
+		return ModeQuick
+	case "thorough":
+		return ModeThorough
+	case "comprehensive":
+		return ModeComprehensive
+	default:
+		return ModeStandard // Default to standard
+	}
+}
+
+// topNTracker maintains only the top N results to reduce memory usage
+// Results are kept sorted by score (best first)
+type topNTracker struct {
+	maxResults     int
+	results        []APIResultSummary
+	scores         []float64 // Combined score for comparison (higher is better)
+	goal           OptimizationGoal
+	inflationRate  float64
+	isFixedMode    bool // True for fixed income mode (ignores optimization goal)
+}
+
+// newTopNTracker creates a tracker that keeps only the top N results
+func newTopNTracker(n int, goal OptimizationGoal, inflationRate float64) *topNTracker {
+	return &topNTracker{
+		maxResults:    n,
+		results:       make([]APIResultSummary, 0, n+1),
+		scores:        make([]float64, 0, n+1),
+		goal:          goal,
+		inflationRate: inflationRate,
+		isFixedMode:   false,
+	}
+}
+
+// newTopNTrackerFixed creates a tracker for fixed income mode
+// In fixed mode, ranking is: doesn't run out → highest balance → lowest tax
+// For strategies that run out: longest duration wins
+func newTopNTrackerFixed(n int, inflationRate float64) *topNTracker {
+	return &topNTracker{
+		maxResults:    n,
+		results:       make([]APIResultSummary, 0, n+1),
+		scores:        make([]float64, 0, n+1),
+		goal:          OptimizeBalance, // Not used in fixed mode
+		inflationRate: inflationRate,
+		isFixedMode:   true,
+	}
+}
+
+// calcScore calculates a single score for comparison (higher is always better)
+func (t *topNTracker) calcScore(summary APIResultSummary, simResult SimulationResult) float64 {
+	// Fixed income mode: income is the same for all strategies that don't run out
+	// So rank by: doesn't run out → highest balance → lowest tax
+	// For strategies that run out: longest duration wins
+	if t.isFixedMode {
+		if simResult.RanOutOfMoney {
+			// Running out: rank by how long it lasts (later year = better)
+			// Use negative base so all running-out are worse than any non-running-out
+			return -1e12 + float64(simResult.RanOutYear)
+		}
+		// Not running out: rank by balance, with lower tax as tiebreaker
+		// Tax is typically 0-500k range, so scale down to be a small tiebreaker
+		return summary.FinalBalance - simResult.TotalTaxPaid*0.0001
+	}
+
+	// Depletion modes: use optimization goal
+	ranOutPenalty := 0.0
+	if simResult.RanOutOfMoney {
+		ranOutPenalty = -1e12 // Large penalty
+	}
+
+	taxEfficiency := 1.0
+	if simResult.TotalWithdrawn > 0 {
+		taxEfficiency = simResult.TotalTaxPaid / simResult.TotalWithdrawn
+	}
+
+	switch t.goal {
+	case OptimizeIncome:
+		// Higher income better, lower tax efficiency better (as tiebreaker)
+		return summary.TotalIncome - taxEfficiency*1000 + ranOutPenalty
+	case OptimizeBalance:
+		// Higher balance better, higher income better (as tiebreaker)
+		return summary.FinalBalance + summary.TotalIncome*0.001 + ranOutPenalty
+	default: // OptimizeTax
+		// Lower tax better (negate for higher=better), higher income better (as tiebreaker)
+		return -summary.TotalTaxPaid + summary.TotalIncome*0.0001 + ranOutPenalty
+	}
+}
+
+// add tries to add a result to the tracker
+// Returns true if the result was kept, false if it was discarded
+func (t *topNTracker) add(summary APIResultSummary, simResult SimulationResult) bool {
+	score := t.calcScore(summary, simResult)
+
+	// If we have room, just add it
+	if len(t.results) < t.maxResults {
+		t.insertSorted(summary, score)
+		return true
+	}
+
+	// Check if better than the worst (last) result
+	if score > t.scores[len(t.scores)-1] {
+		// Remove the worst and insert the new one
+		t.results = t.results[:len(t.results)-1]
+		t.scores = t.scores[:len(t.scores)-1]
+		t.insertSorted(summary, score)
+		return true
+	}
+
+	// Not good enough - discard
+	return false
+}
+
+// insertSorted inserts a result in the correct position to maintain sorted order
+func (t *topNTracker) insertSorted(summary APIResultSummary, score float64) {
+	// Find insertion point (binary search would be faster but N is small)
+	pos := 0
+	for pos < len(t.scores) && t.scores[pos] > score {
+		pos++
+	}
+
+	// Insert at position
+	t.results = append(t.results, APIResultSummary{})
+	t.scores = append(t.scores, 0)
+	copy(t.results[pos+1:], t.results[pos:])
+	copy(t.scores[pos+1:], t.scores[pos:])
+	t.results[pos] = summary
+	t.scores[pos] = score
+}
+
+// getResults returns the top results with ranks assigned
+func (t *topNTracker) getResults() []APIResultSummary {
+	// Assign ranks (already sorted, so rank = position + 1)
+	for i := range t.results {
+		t.results[i].Rank = i + 1
+	}
+	return t.results
+}
+
+// getBest returns the best result (rank 1)
+func (t *topNTracker) getBest() *APIResultSummary {
+	if len(t.results) == 0 {
+		return nil
+	}
+	return &t.results[0]
+}
+
+// calcScoreDepletion calculates score using monthly income (for depletion modes)
+func (t *topNTracker) calcScoreDepletion(summary APIResultSummary, simResult SimulationResult, monthlyIncome float64) float64 {
+	// Penalty for running out of money (applies to all optimization goals)
+	ranOutPenalty := 0.0
+	if simResult.RanOutOfMoney {
+		ranOutPenalty = -1e12 // Large penalty
+	}
+
+	taxEfficiency := 1.0
+	if simResult.TotalWithdrawn > 0 {
+		taxEfficiency = simResult.TotalTaxPaid / simResult.TotalWithdrawn
+	}
+
+	switch t.goal {
+	case OptimizeIncome:
+		// Higher monthly income better, lower tax efficiency better (as tiebreaker)
+		return monthlyIncome - taxEfficiency*10 + ranOutPenalty
+	case OptimizeBalance:
+		// Higher balance better, higher monthly income better (as tiebreaker)
+		return summary.FinalBalance + monthlyIncome*0.1 + ranOutPenalty
+	default: // OptimizeTax
+		// Lower tax better (negate for higher=better), higher monthly income better (as tiebreaker)
+		return -summary.TotalTaxPaid + monthlyIncome*0.001 + ranOutPenalty
+	}
+}
+
+// addDepletion tries to add a depletion result using monthly income for scoring
+func (t *topNTracker) addDepletion(summary APIResultSummary, simResult SimulationResult, monthlyIncome float64) bool {
+	score := t.calcScoreDepletion(summary, simResult, monthlyIncome)
+
+	// If we have room, just add it
+	if len(t.results) < t.maxResults {
+		t.insertSorted(summary, score)
+		return true
+	}
+
+	// Check if better than the worst (last) result
+	if score > t.scores[len(t.scores)-1] {
+		// Remove the worst and insert the new one
+		t.results = t.results[:len(t.results)-1]
+		t.scores = t.scores[:len(t.scores)-1]
+		t.insertSorted(summary, score)
+		return true
+	}
+
+	// Not good enough - discard
+	return false
+}
+
+// getStrategiesWithMode returns strategies based on the permutation mode
+// If permMode is empty, defaults to standard mode
+func getStrategiesWithMode(config *Config, permMode string) []SimulationParams {
+	if permMode == "" {
+		permMode = "standard"
+	}
+	mode := parsePermutationMode(permMode)
+	return GetStrategiesForConfigV2(config, mode)
+}
+
+func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal, permMode string) APISimulationResponse {
+	const maxResults = 40 // Only keep top 40 results to save memory
+
+	// Get strategies based on permutation mode
+	strategies := getStrategiesWithMode(config, permMode)
 
 	// Apply config settings to strategies
 	maximizeCoupleISA := config.Strategy.ShouldMaximizeCoupleISA()
@@ -1461,136 +1740,24 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 		strategies[i].MaximizeCoupleISA = maximizeCoupleISA
 	}
 
-	var results []APIResultSummary
-	var simResults []SimulationResult // Store raw results for second pass
-	var bestResult *APIResultSummary
-	bestScore := -1.0
-	bestSecondaryScore := -1.0
+	// Use fixed mode tracker: rank by balance (not income, since income is fixed)
+	// For strategies that run out: rank by longest duration
+	tracker := newTopNTrackerFixed(maxResults, config.Financial.IncomeInflationRate)
 
-	// Helper to calculate primary and secondary scores based on goal
-	// Returns: primaryScore, secondaryScore, higherIsBetterPrimary, higherIsBetterSecondary
-	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
-		taxEfficiency := 1.0
-		if totalWithdrawn > 0 {
-			taxEfficiency = totalTax / totalWithdrawn
-		}
-		switch goal {
-		case OptimizeIncome:
-			// Primary: income (higher better), Secondary: tax efficiency (lower better)
-			return totalIncome, taxEfficiency, true, false
-		case OptimizeBalance:
-			// Primary: balance (higher better), Secondary: income (higher better)
-			return finalBalance, totalIncome, true, true
-		default: // OptimizeTax
-			// Primary: total tax (lower better), Secondary: income (higher better)
-			return totalTax, totalIncome, false, true
-		}
-	}
-
-	// Check if two scores are "similar" (within 1%)
-	isSimilar := func(a, b float64) bool {
-		if a == 0 && b == 0 {
-			return true
-		}
-		if a == 0 || b == 0 {
-			return false
-		}
-		diff := (a - b) / a
-		if diff < 0 {
-			diff = -diff
-		}
-		return diff < 0.01 // Within 1%
-	}
-
-	// First pass: Find best among strategies
-	// For income optimization: consider all strategies (max income may come from one that runs out)
-	// For tax/balance optimization: only consider strategies that don't run out
+	// Run all strategies, but only keep top N results
 	for i, params := range strategies {
-		result := RunSimulation(params, config)
+		result := RunSimulationV2(params, config)
 		summary := convertToAPISummary(result, true, config.Financial.IncomeInflationRate)
 		summary.StrategyIdx = i // Track original index for PDF export
-		results = append(results, summary)
-		simResults = append(simResults, result)
 
-		// For income optimization, consider all strategies
-		// For tax/balance, only consider strategies that don't run out in first pass
-		shouldConsider := goal == OptimizeIncome || !result.RanOutOfMoney
-		if shouldConsider {
-			score, secondary, higherIsBetter, higherSecondary := calcScores(result.TotalTaxPaid, result.TotalWithdrawn, summary.TotalIncome, summary.FinalBalance)
-
-			// Determine if this is better
-			isBetter := false
-			if bestScore < 0 {
-				isBetter = true
-			} else if higherIsBetter && score > bestScore {
-				isBetter = true
-			} else if !higherIsBetter && score < bestScore {
-				isBetter = true
-			} else if isSimilar(score, bestScore) {
-				// Primary scores are similar, use secondary as tiebreaker
-				if higherSecondary && secondary > bestSecondaryScore {
-					isBetter = true
-				} else if !higherSecondary && secondary < bestSecondaryScore {
-					isBetter = true
-				}
-			}
-
-			if isBetter {
-				bestScore = score
-				bestSecondaryScore = secondary
-				bestCopy := summary
-				bestResult = &bestCopy
-			}
-		}
+		// Add to tracker - it will discard if not in top N
+		tracker.add(summary, result)
+		// result is now eligible for garbage collection if not kept
 	}
 
-	// Second pass: If all ran out, prefer strategies with positive final balance
-	if bestResult == nil {
-		bestScore = -1.0
-		bestSecondaryScore = -1.0
-		for i, r := range results {
-			// Only consider strategies with positive final balance
-			if r.FinalBalance > 1000 {
-				score, secondary, higherIsBetter, higherSecondary := calcScores(simResults[i].TotalTaxPaid, simResults[i].TotalWithdrawn, r.TotalIncome, r.FinalBalance)
-
-				// Determine if this is better
-				isBetter := false
-				if bestScore < 0 {
-					isBetter = true
-				} else if higherIsBetter && score > bestScore {
-					isBetter = true
-				} else if !higherIsBetter && score < bestScore {
-					isBetter = true
-				} else if isSimilar(score, bestScore) {
-					// Primary scores are similar, use secondary as tiebreaker
-					if higherSecondary && secondary > bestSecondaryScore {
-						isBetter = true
-					} else if !higherSecondary && secondary < bestSecondaryScore {
-						isBetter = true
-					}
-				}
-
-				if isBetter {
-					bestScore = score
-					bestSecondaryScore = secondary
-					bestCopy := results[i]
-					bestResult = &bestCopy
-				}
-			}
-		}
-	}
-
-	// Third pass: If still no best (all have zero balance), pick longest-lasting
-	if bestResult == nil {
-		longestYear := 0
-		for i, r := range results {
-			if r.RanOutYear > longestYear {
-				longestYear = r.RanOutYear
-				bestCopy := results[i]
-				bestResult = &bestCopy
-			}
-		}
-	}
+	// Get the final results with ranks assigned
+	results := tracker.getResults()
+	bestResult := tracker.getBest()
 
 	return APISimulationResponse{
 		Success:       true,
@@ -1602,6 +1769,8 @@ func (ws *WebServer) runFixedSimulation(config *Config, goal OptimizationGoal) A
 
 // runDepletionSimulation runs depletion mode
 func (ws *WebServer) runDepletionSimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
+	const maxResults = 40 // Only keep top 40 results to save memory
+
 	if config.IncomeRequirements.TargetDepletionAge <= 0 {
 		return APISimulationResponse{
 			Success: false,
@@ -1611,82 +1780,18 @@ func (ws *WebServer) runDepletionSimulation(config *Config, goal OptimizationGoa
 
 	depletionResults := RunAllDepletionCalculations(config)
 
-	var results []APIResultSummary
-	var simResults []SimulationResult
-	var bestResult *APIResultSummary
-	bestScore := -1.0
-	bestSecondaryScore := -1.0
-
-	// Helper to calculate primary and secondary scores based on goal
-	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
-		taxEfficiency := 1.0
-		if totalWithdrawn > 0 {
-			taxEfficiency = totalTax / totalWithdrawn
-		}
-		switch goal {
-		case OptimizeIncome:
-			return totalIncome, taxEfficiency, true, false
-		case OptimizeBalance:
-			return finalBalance, totalIncome, true, true
-		default: // OptimizeTax
-			return totalTax, totalIncome, false, true
-		}
-	}
-
-	// Check if two scores are "similar" (within 1%)
-	isSimilar := func(a, b float64) bool {
-		if a == 0 && b == 0 {
-			return true
-		}
-		if a == 0 || b == 0 {
-			return false
-		}
-		diff := (a - b) / a
-		if diff < 0 {
-			diff = -diff
-		}
-		return diff < 0.01
-	}
+	// Use tracker to keep only top results
+	tracker := newTopNTracker(maxResults, goal, config.Financial.IncomeInflationRate)
 
 	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
 		summary.StrategyIdx = i // Track original index for PDF export
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
-		results = append(results, summary)
-		simResults = append(simResults, dr.SimulationResult)
-
-		// Use MonthlyBeforeAge for income scoring to match sensitivity grid's FindBestDepletionStrategy
-		score, secondary, higherIsBetter, higherSecondary := calcScores(
-			dr.SimulationResult.TotalTaxPaid,
-			dr.SimulationResult.TotalWithdrawn,
-			dr.MonthlyBeforeAge, // Use sustainable monthly income, not TotalIncome
-			summary.FinalBalance,
-		)
-
-		// Determine if this is better
-		isBetter := false
-		if bestScore < 0 {
-			isBetter = true
-		} else if higherIsBetter && score > bestScore {
-			isBetter = true
-		} else if !higherIsBetter && score < bestScore {
-			isBetter = true
-		} else if isSimilar(score, bestScore) {
-			// Primary scores are similar, use secondary as tiebreaker
-			if higherSecondary && secondary > bestSecondaryScore {
-				isBetter = true
-			} else if !higherSecondary && secondary < bestSecondaryScore {
-				isBetter = true
-			}
-		}
-
-		if isBetter {
-			bestScore = score
-			bestSecondaryScore = secondary
-			bestCopy := summary
-			bestResult = &bestCopy
-		}
+		tracker.addDepletion(summary, dr.SimulationResult, dr.MonthlyBeforeAge)
 	}
+
+	results := tracker.getResults()
+	bestResult := tracker.getBest()
 
 	return APISimulationResponse{
 		Success:       true,
@@ -1697,7 +1802,11 @@ func (ws *WebServer) runDepletionSimulation(config *Config, goal OptimizationGoa
 }
 
 // runPensionOnlySimulation runs pension-only depletion mode
-func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
+func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationGoal, permMode string) APISimulationResponse {
+	const maxResults = 40 // Only keep top 40 results to save memory
+
+	// Note: permMode is currently unused as pension-only uses specialized GetPensionOnlyStrategiesForConfig
+	// This could be extended in the future to use V2 with filtered drawdown orders
 	if config.IncomeRequirements.TargetDepletionAge <= 0 {
 		return APISimulationResponse{
 			Success: false,
@@ -1707,41 +1816,8 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationG
 
 	depletionResults := RunPensionOnlyDepletionCalculations(config)
 
-	var results []APIResultSummary
-	var bestResult *APIResultSummary
-	bestScore := -1.0
-	bestSecondaryScore := -1.0
-
-	// Helper to calculate primary and secondary scores based on goal
-	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
-		taxEfficiency := 1.0
-		if totalWithdrawn > 0 {
-			taxEfficiency = totalTax / totalWithdrawn
-		}
-		switch goal {
-		case OptimizeIncome:
-			return totalIncome, taxEfficiency, true, false
-		case OptimizeBalance:
-			return finalBalance, totalIncome, true, true
-		default: // OptimizeTax
-			return totalTax, totalIncome, false, true
-		}
-	}
-
-	// Check if two scores are "similar" (within 1%)
-	isSimilar := func(a, b float64) bool {
-		if a == 0 && b == 0 {
-			return true
-		}
-		if a == 0 || b == 0 {
-			return false
-		}
-		diff := (a - b) / a
-		if diff < 0 {
-			diff = -diff
-		}
-		return diff < 0.01
-	}
+	// Use tracker to keep only top results
+	tracker := newTopNTracker(maxResults, goal, config.Financial.IncomeInflationRate)
 
 	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
@@ -1749,40 +1825,11 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationG
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
 		// Calculate final ISA from simulation result
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
-		results = append(results, summary)
-
-		// Use MonthlyBeforeAge for income scoring to match sensitivity grid's FindBestDepletionStrategy
-		score, secondary, higherIsBetter, higherSecondary := calcScores(
-			dr.SimulationResult.TotalTaxPaid,
-			dr.SimulationResult.TotalWithdrawn,
-			dr.MonthlyBeforeAge, // Use sustainable monthly income, not TotalIncome
-			summary.FinalBalance,
-		)
-
-		// Determine if this is better
-		isBetter := false
-		if bestScore < 0 {
-			isBetter = true
-		} else if higherIsBetter && score > bestScore {
-			isBetter = true
-		} else if !higherIsBetter && score < bestScore {
-			isBetter = true
-		} else if isSimilar(score, bestScore) {
-			// Primary scores are similar, use secondary as tiebreaker
-			if higherSecondary && secondary > bestSecondaryScore {
-				isBetter = true
-			} else if !higherSecondary && secondary < bestSecondaryScore {
-				isBetter = true
-			}
-		}
-
-		if isBetter {
-			bestScore = score
-			bestSecondaryScore = secondary
-			bestCopy := summary
-			bestResult = &bestCopy
-		}
+		tracker.addDepletion(summary, dr.SimulationResult, dr.MonthlyBeforeAge)
 	}
+
+	results := tracker.getResults()
+	bestResult := tracker.getBest()
 
 	return APISimulationResponse{
 		Success:       true,
@@ -1793,7 +1840,11 @@ func (ws *WebServer) runPensionOnlySimulation(config *Config, goal OptimizationG
 }
 
 // runPensionToISASimulation runs pension-to-ISA mode
-func (ws *WebServer) runPensionToISASimulation(config *Config, goal OptimizationGoal) APISimulationResponse {
+func (ws *WebServer) runPensionToISASimulation(config *Config, goal OptimizationGoal, permMode string) APISimulationResponse {
+	const maxResults = 40 // Only keep top 40 results to save memory
+
+	// Note: permMode is currently unused as pension-to-ISA uses specialized GetPensionToISAStrategiesForConfig
+	// This could be extended in the future to use V2 with filtered drawdown orders
 	if config.IncomeRequirements.TargetDepletionAge <= 0 {
 		return APISimulationResponse{
 			Success: false,
@@ -1803,41 +1854,8 @@ func (ws *WebServer) runPensionToISASimulation(config *Config, goal Optimization
 
 	depletionResults := RunPensionToISADepletionCalculations(config)
 
-	var results []APIResultSummary
-	var bestResult *APIResultSummary
-	bestScore := -1.0
-	bestSecondaryScore := -1.0
-
-	// Helper to calculate primary and secondary scores based on goal
-	calcScores := func(totalTax, totalWithdrawn, totalIncome, finalBalance float64) (primary, secondary float64, higherPrimary, higherSecondary bool) {
-		taxEfficiency := 1.0
-		if totalWithdrawn > 0 {
-			taxEfficiency = totalTax / totalWithdrawn
-		}
-		switch goal {
-		case OptimizeIncome:
-			return totalIncome, taxEfficiency, true, false
-		case OptimizeBalance:
-			return finalBalance, totalIncome, true, true
-		default: // OptimizeTax
-			return totalTax, totalIncome, false, true
-		}
-	}
-
-	// Check if two scores are "similar" (within 1%)
-	isSimilar := func(a, b float64) bool {
-		if a == 0 && b == 0 {
-			return true
-		}
-		if a == 0 || b == 0 {
-			return false
-		}
-		diff := (a - b) / a
-		if diff < 0 {
-			diff = -diff
-		}
-		return diff < 0.01
-	}
+	// Use tracker to keep only top results
+	tracker := newTopNTracker(maxResults, goal, config.Financial.IncomeInflationRate)
 
 	for i, dr := range depletionResults {
 		summary := convertToAPISummary(dr.SimulationResult, true, config.Financial.IncomeInflationRate)
@@ -1845,40 +1863,11 @@ func (ws *WebServer) runPensionToISASimulation(config *Config, goal Optimization
 		summary.MonthlyIncome = dr.MonthlyBeforeAge
 		// Calculate final ISA from simulation result
 		summary.FinalISA = calculateFinalISA(dr.SimulationResult)
-		results = append(results, summary)
-
-		// Use MonthlyBeforeAge for income scoring to match sensitivity grid's FindBestDepletionStrategy
-		score, secondary, higherIsBetter, higherSecondary := calcScores(
-			dr.SimulationResult.TotalTaxPaid,
-			dr.SimulationResult.TotalWithdrawn,
-			dr.MonthlyBeforeAge, // Use sustainable monthly income, not TotalIncome
-			summary.FinalBalance,
-		)
-
-		// Determine if this is better
-		isBetter := false
-		if bestScore < 0 {
-			isBetter = true
-		} else if higherIsBetter && score > bestScore {
-			isBetter = true
-		} else if !higherIsBetter && score < bestScore {
-			isBetter = true
-		} else if isSimilar(score, bestScore) {
-			// Primary scores are similar, use secondary as tiebreaker
-			if higherSecondary && secondary > bestSecondaryScore {
-				isBetter = true
-			} else if !higherSecondary && secondary < bestSecondaryScore {
-				isBetter = true
-			}
-		}
-
-		if isBetter {
-			bestScore = score
-			bestSecondaryScore = secondary
-			bestCopy := summary
-			bestResult = &bestCopy
-		}
+		tracker.addDepletion(summary, dr.SimulationResult, dr.MonthlyBeforeAge)
 	}
+
+	results := tracker.getResults()
+	bestResult := tracker.getBest()
 
 	return APISimulationResponse{
 		Success:       true,
@@ -2203,8 +2192,8 @@ const webUIHTML = `<!DOCTYPE html>
             overflow: hidden;
         }
         .config-panel {
-            width: 400px;
-            min-width: 400px;
+            width: 480px;
+            min-width: 480px;
             background: var(--card-bg);
             border-right: 1px solid var(--border);
             overflow-y: auto;
@@ -2212,7 +2201,7 @@ const webUIHTML = `<!DOCTYPE html>
             transition: margin-left 0.3s ease, opacity 0.3s ease;
         }
         .config-panel.collapsed {
-            margin-left: -400px;
+            margin-left: -480px;
             opacity: 0;
         }
         .results-panel {
@@ -2236,7 +2225,7 @@ const webUIHTML = `<!DOCTYPE html>
             box-shadow: 2px 0 8px rgba(0,0,0,0.2);
             transition: left 0.3s ease;
         }
-        .config-toggle.panel-open { left: 400px; }
+        .config-toggle.panel-open { left: 480px; }
         .config-toggle:hover { background: var(--primary-dark); }
         .grid { display: grid; gap: 1.5rem; }
         .grid-2 { grid-template-columns: 1fr 1fr; }
@@ -2301,6 +2290,11 @@ const webUIHTML = `<!DOCTYPE html>
             color: var(--text-muted);
             margin-top: 0.2rem;
             line-height: 1.3;
+        }
+        .depletion-only-hint {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: normal;
         }
         .form-section {
             border: 1px solid var(--border);
@@ -2589,8 +2583,8 @@ const webUIHTML = `<!DOCTYPE html>
         .detail-table tr:hover { background: rgba(37, 99, 235, 0.05); }
         .detail-table tr.highlight-mortgage { background: #fff3cd; }
         .detail-table tr.highlight-mortgage:hover { background: #ffe69c; }
-        .detail-table tr.highlight-retire { background: #d1e7dd; }
-        .detail-table tr.highlight-retire:hover { background: #badbcc; }
+        .detail-table tr.highlight-stop-work { background: #d1e7dd; }
+        .detail-table tr.highlight-stop-work:hover { background: #badbcc; }
         .detail-table tr.highlight-spa { background: #cfe2ff; }
         .detail-table tr.highlight-spa:hover { background: #b6d4fe; }
         .detail-table tr.highlight-db { background: #e2d9f3; }
@@ -2599,6 +2593,7 @@ const webUIHTML = `<!DOCTYPE html>
         .detail-table tr.highlight-pension-depleted:hover { background: #f1aeb5; }
         .detail-table tr.highlight-isa-depleted { background: #ffe5d0; }
         .detail-table tr.highlight-isa-depleted:hover { background: #ffd1b3; }
+        .event-tag { display: inline-block; background: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; margin: 1px 0; white-space: nowrap; }
 
         /* Expandable year rows */
         .detail-table tr.expandable-row { cursor: pointer; }
@@ -2936,13 +2931,26 @@ const webUIHTML = `<!DOCTYPE html>
                         <div class="desc">Transfer excess to <abbr title="Individual Savings Account">ISA</abbr>s</div>
                     </div>
                 </div>
-                <div class="form-group" style="margin-top:1rem;">
-                    <label>Optimization Goal</label>
+                <div class="form-group" style="margin-top:1rem;" id="optimization-goal-group">
+                    <label>Optimization Goal <span class="depletion-only-hint">(depletion modes only)</span></label>
                     <select id="optimization-goal" style="width:100%;padding:0.5rem;border-radius:4px;border:1px solid var(--border);">
                         <option value="tax">Tax Efficiency (minimize tax paid)</option>
                         <option value="income" selected>Total Income (maximize withdrawals)</option>
                         <option value="balance">Final Balance (maximize end wealth)</option>
                     </select>
+                    <div class="form-hint" id="fixed-mode-hint" style="display:none;">
+                        Fixed income mode ranks by: highest final balance, then lowest tax
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>Strategy Depth</label>
+                    <select id="permutation-mode" style="width:100%;padding:0.5rem;border-radius:4px;border:1px solid var(--border);">
+                        <option value="quick">Quick (~8 strategies)</option>
+                        <option value="standard" selected>Standard (~100 strategies)</option>
+                        <option value="thorough">Thorough (~600 strategies)</option>
+                        <option value="comprehensive">Comprehensive (~1000 strategies)</option>
+                    </select>
+                    <div class="form-hint">More strategies = more analysis time but better coverage</div>
                 </div>
             </div>
                 <!-- People -->
@@ -2958,14 +2966,14 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>Birth Date</label>
-                                    <input type="text" id="p1-birth" value="1970-12-15" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
+                                    <input type="date" id="p1-birth" value="1970-12-15">
                                 </div>
                             </div>
                             <div class="form-row-5">
                                 <div class="form-group">
                                     <label>Stop Work</label>
-                                    <input type="text" id="p1-retire" value="2026-07-15" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
-                                    <div class="form-hint">Date (YYYY-MM-DD)</div>
+                                    <input type="date" id="p1-retire" value="2026-07-15">
+                                    <div class="form-hint">Retirement date</div>
                                 </div>
                                 <div class="form-group">
                                     <label>Pension Age</label>
@@ -2979,12 +2987,12 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>Pension</label>
-                                    <input type="text" id="p1-pension" value="500000">
+                                    <input type="text" id="p1-pension" class="money-input" value="500000">
                                     <div class="form-hint">DC pot</div>
                                 </div>
                                 <div class="form-group">
                                     <label>ISA</label>
-                                    <input type="text" id="p1-isa" value="100000">
+                                    <input type="text" id="p1-isa" class="money-input" value="100000">
                                     <div class="form-hint">Tax-free</div>
                                 </div>
                             </div>
@@ -2996,7 +3004,7 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>DB Amount</label>
-                                    <input type="text" id="p1-db-amount" value="0">
+                                    <input type="text" id="p1-db-amount" class="money-input" value="0">
                                     <div class="form-hint">Annual</div>
                                 </div>
                                 <div class="form-group">
@@ -3006,8 +3014,15 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>ISA Limit</label>
-                                    <input type="text" id="p1-isa-limit" value="20000">
+                                    <input type="text" id="p1-isa-limit" class="money-input" value="20000">
                                     <div class="form-hint">Annual</div>
+                                </div>
+                            </div>
+                            <div class="form-row-4">
+                                <div class="form-group">
+                                    <label>Work Income</label>
+                                    <input type="text" id="p1-work-income" class="money-input" value="0">
+                                    <div class="form-hint">Salary (gross)</div>
                                 </div>
                             </div>
                             <details class="advanced-options">
@@ -3075,14 +3090,14 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>Birth Date</label>
-                                    <input type="text" id="p2-birth" value="1975-01-13" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
+                                    <input type="date" id="p2-birth" value="1975-01-13">
                                 </div>
                             </div>
                             <div class="form-row-5">
                                 <div class="form-group">
                                     <label>Stop Work</label>
-                                    <input type="text" id="p2-retire" value="2032-06-01" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}">
-                                    <div class="form-hint">Date (YYYY-MM-DD)</div>
+                                    <input type="date" id="p2-retire" value="2032-06-01">
+                                    <div class="form-hint">Retirement date</div>
                                 </div>
                                 <div class="form-group">
                                     <label>Pension Age</label>
@@ -3096,12 +3111,12 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>Pension</label>
-                                    <input type="text" id="p2-pension" value="500000">
+                                    <input type="text" id="p2-pension" class="money-input" value="500000">
                                     <div class="form-hint">DC pot</div>
                                 </div>
                                 <div class="form-group">
                                     <label>ISA</label>
-                                    <input type="text" id="p2-isa" value="100000">
+                                    <input type="text" id="p2-isa" class="money-input" value="100000">
                                     <div class="form-hint">Tax-free</div>
                                 </div>
                             </div>
@@ -3113,7 +3128,7 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>DB Amount</label>
-                                    <input type="text" id="p2-db-amount" value="400">
+                                    <input type="text" id="p2-db-amount" class="money-input" value="400">
                                     <div class="form-hint">Annual</div>
                                 </div>
                                 <div class="form-group">
@@ -3123,8 +3138,15 @@ const webUIHTML = `<!DOCTYPE html>
                                 </div>
                                 <div class="form-group">
                                     <label>ISA Limit</label>
-                                    <input type="text" id="p2-isa-limit" value="20000">
+                                    <input type="text" id="p2-isa-limit" class="money-input" value="20000">
                                     <div class="form-hint">Annual</div>
+                                </div>
+                            </div>
+                            <div class="form-row-4">
+                                <div class="form-group">
+                                    <label>Work Income</label>
+                                    <input type="text" id="p2-work-income" class="money-input" value="0">
+                                    <div class="form-hint">Salary (gross)</div>
                                 </div>
                             </div>
                             <details class="advanced-options">
@@ -3215,7 +3237,7 @@ const webUIHTML = `<!DOCTYPE html>
                                         </div>
                                         <div class="form-group" style="margin-bottom: 0;">
                                             <label style="font-size: 0.7rem;">Amount</label>
-                                            <input type="text" class="tier-amount" value="6000">
+                                            <input type="text" class="tier-amount money-input" value="6000">
                                         </div>
                                         <button type="button" class="remove-tier-btn" onclick="removeIncomeTier(this)" style="background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9rem; padding: 0.35rem; margin-bottom: 0.15rem;">×</button>
                                     </div>
@@ -3236,7 +3258,7 @@ const webUIHTML = `<!DOCTYPE html>
                                             </select>
                                         </div>
                                         <div class="form-group" style="margin-bottom: 0;">
-                                            <input type="text" class="tier-amount" value="4000">
+                                            <input type="text" class="tier-amount money-input" value="4000">
                                         </div>
                                         <button type="button" class="remove-tier-btn" onclick="removeIncomeTier(this)" style="background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9rem; padding: 0.35rem; margin-bottom: 0.15rem;">×</button>
                                     </div>
@@ -3445,7 +3467,7 @@ const webUIHTML = `<!DOCTYPE html>
                         <div class="form-row">
                             <div class="form-group">
                                 <label>State Pension</label>
-                                <input type="text" id="state-pension" value="12547.60">
+                                <input type="text" id="state-pension" class="money-input" value="12547.60">
                                 <div class="form-hint">Annual amount</div>
                             </div>
                         </div>
@@ -3514,12 +3536,12 @@ const webUIHTML = `<!DOCTYPE html>
                             <div class="form-row-3">
                                 <div class="form-group">
                                     <label>Personal Allowance</label>
-                                    <input type="text" id="tax-personal-allowance" value="12570">
+                                    <input type="text" id="tax-personal-allowance" class="money-input" value="12570">
                                     <div class="form-hint">Tax-free amount</div>
                                 </div>
                                 <div class="form-group">
                                     <label>Taper Threshold</label>
-                                    <input type="text" id="tax-tapering-threshold" value="100000">
+                                    <input type="text" id="tax-tapering-threshold" class="money-input" value="100000">
                                     <div class="form-hint">PA starts reducing</div>
                                 </div>
                                 <div class="form-group">
@@ -3619,11 +3641,23 @@ const webUIHTML = `<!DOCTYPE html>
                     <div class="collapse-content collapsed">
                         <div id="mortgage-parts-container"></div>
                         <button type="button" class="btn" onclick="addMortgagePart()" style="margin-top: 0.25rem;">+ Add Mortgage</button>
-                        <div class="form-row" style="margin-top: 0.5rem;">
+                        <div class="form-row-3" style="margin-top: 0.5rem;">
                             <div class="form-group">
                                 <label>Early Payoff Year</label>
                                 <input type="number" id="mortgage-early" value="2028">
                                 <div class="form-hint">All parts</div>
+                            </div>
+                            <div class="form-group">
+                                <label style="display:flex;align-items:center;gap:0.5rem;">
+                                    <input type="checkbox" id="mortgage-allow-extension" style="width:auto;" onchange="updateExtensionFields()">
+                                    Allow Extension
+                                </label>
+                                <div class="form-hint">Include extended mortgage strategies</div>
+                            </div>
+                            <div class="form-group" id="extension-year-group" style="display:none;">
+                                <label>Extend To Year</label>
+                                <input type="number" id="mortgage-extended-year" value="2041">
+                                <div class="form-hint">Year to extend mortgage to</div>
                             </div>
                         </div>
                     </div>
@@ -3717,6 +3751,51 @@ const webUIHTML = `<!DOCTYPE html>
     <script>
         // State
         let currentMode = 'fixed';
+
+        // Money input formatting with thousand separators
+        function formatMoneyDisplay(value) {
+            const num = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+            if (isNaN(num)) return '';
+            // Format with commas, preserve decimals if present
+            const parts = num.toString().split('.');
+            parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+            return parts.join('.');
+        }
+
+        function parseMoneyValue(str) {
+            return parseFloat(String(str).replace(/[^0-9.-]/g, '')) || 0;
+        }
+
+        function initMoneyInputs() {
+            document.querySelectorAll('.money-input').forEach(input => {
+                // Format initial value
+                if (input.value) {
+                    input.value = formatMoneyDisplay(input.value);
+                }
+                // Remove existing listeners to avoid duplicates
+                input.removeEventListener('focus', handleMoneyFocus);
+                input.removeEventListener('blur', handleMoneyBlur);
+                // Add listeners
+                input.addEventListener('focus', handleMoneyFocus);
+                input.addEventListener('blur', handleMoneyBlur);
+            });
+        }
+
+        function handleMoneyFocus(e) {
+            // Show raw number on focus for editing
+            const raw = parseMoneyValue(e.target.value);
+            e.target.value = raw || '';
+        }
+
+        function handleMoneyBlur(e) {
+            // Format with commas on blur
+            e.target.value = formatMoneyDisplay(e.target.value);
+        }
+
+        // Re-init money inputs after dynamic content changes
+        function refreshMoneyInputs() {
+            initMoneyInputs();
+        }
 
         // Toggle config panel
         function toggleConfigPanel() {
@@ -3919,10 +3998,16 @@ const webUIHTML = `<!DOCTYPE html>
 
             if (data && data.best) {
                 document.getElementById('summary-best-container').style.display = 'flex';
-                const goalNames = { 'tax': 'Min Tax', 'income': 'Max Income', 'balance': 'Max Balance' };
-                const goal = document.getElementById('optimization-goal').value;
                 const bestName = data.best.descriptive_name || data.best.short_name;
-                document.getElementById('summary-best').textContent = bestName + ' (' + (goalNames[goal] || goal) + ')';
+                const isDepletion = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
+                if (isDepletion) {
+                    const goalNames = { 'tax': 'Min Tax', 'income': 'Max Income', 'balance': 'Max Balance' };
+                    const goal = document.getElementById('optimization-goal').value;
+                    document.getElementById('summary-best').textContent = bestName + ' (' + (goalNames[goal] || goal) + ')';
+                } else {
+                    // Fixed mode: always ranked by balance
+                    document.getElementById('summary-best').textContent = bestName + ' (Max Balance)';
+                }
             } else {
                 document.getElementById('summary-best-container').style.display = 'none';
             }
@@ -3943,6 +4028,23 @@ const webUIHTML = `<!DOCTYPE html>
             const isDepletion = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
             document.getElementById('fixed-income-fields').classList.toggle('hidden', isDepletion);
             document.getElementById('depletion-fields').classList.toggle('hidden', !isDepletion);
+
+            // Show/hide optimization goal (only used in depletion modes)
+            // In fixed income mode, ranking is always: highest balance > lowest tax
+            const optimizationGoal = document.getElementById('optimization-goal');
+            const fixedModeHint = document.getElementById('fixed-mode-hint');
+            const depletionHint = document.querySelector('.depletion-only-hint');
+            if (isDepletion) {
+                optimizationGoal.disabled = false;
+                optimizationGoal.style.opacity = '1';
+                if (fixedModeHint) fixedModeHint.style.display = 'none';
+                if (depletionHint) depletionHint.style.display = 'none';
+            } else {
+                optimizationGoal.disabled = true;
+                optimizationGoal.style.opacity = '0.5';
+                if (fixedModeHint) fixedModeHint.style.display = 'block';
+                if (depletionHint) depletionHint.style.display = 'inline';
+            }
 
             // Auto-expand Income Requirements section when switching to depletion mode
             if (isDepletion) {
@@ -4095,13 +4197,14 @@ const webUIHTML = `<!DOCTYPE html>
                         '</select>' +
                     '</div>' +
                     '<div class="form-group" style="margin-bottom: 0;">' +
-                        '<input type="text" class="tier-amount" value="' + amount + '">' +
+                        '<input type="text" class="tier-amount money-input" value="' + amount + '">' +
                     '</div>' +
                     '<button type="button" class="remove-tier-btn" onclick="removeIncomeTier(this)" style="background: var(--danger); color: white; border: none; border-radius: 3px; cursor: pointer; font-size: 0.9rem; padding: 0.35rem; margin-bottom: 0.15rem;">×</button>' +
                 '</div>';
 
             container.appendChild(row);
             updateTierAmountPlaceholders();
+            refreshMoneyInputs();
         }
 
         function removeIncomeTier(btn) {
@@ -4178,6 +4281,15 @@ const webUIHTML = `<!DOCTYPE html>
                 updateTierAmountPlaceholders();
             }
         });
+
+        // Mortgage extension toggle
+        function updateExtensionFields() {
+            const allowExtension = document.getElementById('mortgage-allow-extension').checked;
+            const extensionYearGroup = document.getElementById('extension-year-group');
+            extensionYearGroup.style.display = allowExtension ? 'block' : 'none';
+            // Re-run simulation when extension settings change
+            runSimulation();
+        }
 
         // Mortgage parts management
         let mortgagePartIndex = 0;
@@ -4271,6 +4383,7 @@ const webUIHTML = `<!DOCTYPE html>
                     db_pension_amount: parseMoney(document.getElementById('p1-db-amount').value),
                     db_pension_start_age: parseInt(document.getElementById('p1-db-age').value) || 0,
                     isa_annual_limit: parseMoney(document.getElementById('p1-isa-limit').value),
+                    work_income: parseMoney(document.getElementById('p1-work-income').value),
                     // Advanced options
                     state_pension_defer_years: parseInt(document.getElementById('p1-sp-defer').value) || 0,
                     db_pension_normal_age: parseInt(document.getElementById('p1-db-normal-age').value) || 65,
@@ -4294,6 +4407,7 @@ const webUIHTML = `<!DOCTYPE html>
                     db_pension_amount: parseMoney(document.getElementById('p2-db-amount').value),
                     db_pension_start_age: parseInt(document.getElementById('p2-db-age').value) || 0,
                     isa_annual_limit: parseMoney(document.getElementById('p2-isa-limit').value),
+                    work_income: parseMoney(document.getElementById('p2-work-income').value),
                     // Advanced options
                     state_pension_defer_years: parseInt(document.getElementById('p2-sp-defer').value) || 0,
                     db_pension_normal_age: parseInt(document.getElementById('p2-db-normal-age').value) || 65,
@@ -4309,9 +4423,11 @@ const webUIHTML = `<!DOCTYPE html>
 
             const isDepletion = ['depletion', 'pension-only', 'pension-to-isa'].includes(currentMode);
             const optimizationGoal = document.getElementById('optimization-goal').value;
+            const permutationMode = document.getElementById('permutation-mode').value;
 
             return {
                 mode: currentMode,
+                permutation_mode: permutationMode,
                 optimization_goal: optimizationGoal,
                 people: people,
                 financial: {
@@ -4355,10 +4471,14 @@ const webUIHTML = `<!DOCTYPE html>
                 mortgage: (() => {
                     const parts = getMortgageParts();
                     const endYear = parts.length > 0 ? Math.max(...parts.map(p => p.start_year + p.term_years)) : 2045;
+                    const allowExtension = document.getElementById('mortgage-allow-extension').checked;
+                    const extendedEndYear = parseInt(document.getElementById('mortgage-extended-year').value) || endYear + 10;
                     return {
                         parts: parts,
                         end_year: endYear,
-                        early_payoff_year: parseInt(document.getElementById('mortgage-early').value)
+                        early_payoff_year: parseInt(document.getElementById('mortgage-early').value),
+                        allow_extension: allowExtension,
+                        extended_end_year: allowExtension ? extendedEndYear : 0
                     };
                 })(),
                 simulation: {
@@ -4595,13 +4715,17 @@ const webUIHTML = `<!DOCTYPE html>
         let lastResults = null;
 
         // Sort state for All Strategies grid
-        let strategySortField = 'name';
+        let strategySortField = 'rank';
         let strategySortDir = 'asc';
 
         function sortStrategies(results, field, dir) {
             return [...results].sort((a, b) => {
                 let valA, valB;
                 switch(field) {
+                    case 'rank':
+                        valA = a.rank || 9999;
+                        valB = b.rank || 9999;
+                        break;
                     case 'name':
                         valA = (a.descriptive_name || a.short_name).toLowerCase();
                         valB = (b.descriptive_name || b.short_name).toLowerCase();
@@ -4651,6 +4775,24 @@ const webUIHTML = `<!DOCTYPE html>
             if (lastResults) renderResults(lastResults);
         }
 
+        // Scroll to and expand the best strategy
+        function scrollToBestStrategy() {
+            if (!lastResults || !lastResults.best) return;
+            const best = lastResults.best;
+            // Find the accordion item matching the best strategy_idx
+            const sortedResults = sortStrategies(lastResults.results, strategySortField, strategySortDir);
+            const bestIdx = sortedResults.findIndex(r => r.strategy_idx === best.strategy_idx);
+            if (bestIdx >= 0) {
+                // Expand the accordion
+                toggleAccordion(bestIdx);
+                // Scroll to the header
+                const header = document.getElementById('accordion-header-' + bestIdx);
+                if (header) {
+                    header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            }
+        }
+
         // Render results
         function renderResults(data) {
             lastResults = data;
@@ -4671,7 +4813,9 @@ const webUIHTML = `<!DOCTYPE html>
 
             if (best) {
                 const bestDisplayName = best.descriptive_name || best.short_name;
-                html += '<div class="metric"><div class="metric-value" style="font-size:0.9rem;">' + bestDisplayName + '</div><div class="metric-label">Best Strategy</div></div>';
+                html += '<div class="metric" style="cursor:pointer;" onclick="scrollToBestStrategy()" title="Click to view details">';
+                html += '<div class="metric-value" style="font-size:0.9rem;">' + bestDisplayName + ' →</div>';
+                html += '<div class="metric-label">Best Strategy</div></div>';
                 html += '<div class="metric ' + (best.ran_out_of_money ? 'danger' : 'success') + '"><div class="metric-value">' + formatMoney(best.total_tax_paid) + '</div><div class="metric-label">Total Tax Paid</div></div>';
                 html += '<div class="metric"><div class="metric-value">' + formatMoney(best.final_balance) + '</div><div class="metric-label">Final Balance</div></div>';
                 if (best.final_isa > 0) {
@@ -4705,6 +4849,7 @@ const webUIHTML = `<!DOCTYPE html>
             // Sortable header row
             const sortIcon = (field) => strategySortField === field ? (strategySortDir === 'asc' ? ' ▲' : ' ▼') : '';
             html += '<div class="strategy-sort-header" style="display:flex;gap:0.5rem;padding:0.5rem;background:var(--bg-darker);border-radius:4px;margin-bottom:0.5rem;font-size:0.75rem;font-weight:600;">';
+            html += '<div style="width:35px;text-align:center;cursor:pointer;" onclick="handleSortClick(\'rank\')">#' + sortIcon('rank') + '</div>';
             html += '<div style="flex:1;cursor:pointer;" onclick="handleSortClick(\'name\')">Strategy' + sortIcon('name') + '</div>';
             html += '<div style="width:70px;text-align:right;cursor:pointer;" onclick="handleSortClick(\'tax\')">Tax' + sortIcon('tax') + '</div>';
             html += '<div style="width:70px;text-align:right;cursor:pointer;" onclick="handleSortClick(\'income\')">Income' + sortIcon('income') + '</div>';
@@ -4733,11 +4878,12 @@ const webUIHTML = `<!DOCTYPE html>
             const sortedResults = sortStrategies(data.results, strategySortField, strategySortDir);
 
             sortedResults.forEach((r, idx) => {
-                const isBest = best && r.short_name === best.short_name;
+                const isBest = best && r.strategy_idx === best.strategy_idx;
                 const displayName = r.descriptive_name || r.short_name;
-                html += '<div class="strategy-accordion-item">';
+                html += '<div class="strategy-accordion-item" data-strategy-idx="' + r.strategy_idx + '">';
                 html += '<div class="strategy-accordion-header' + (isBest ? ' best' : '') + '" onclick="toggleAccordion(' + idx + ')" id="accordion-header-' + idx + '">';
                 html += '<span class="expand-icon">&#9654;</span>';
+                html += '<span class="strategy-rank" style="width:25px;text-align:center;font-weight:600;color:' + (r.rank <= 3 ? 'var(--success)' : 'var(--text-muted)') + ';">' + (r.rank || '-') + '</span>';
                 html += '<span class="strategy-name">' + displayName + (isBest ? ' ⭐' : '') + '</span>';
                 // Show appropriate badge based on mode
                 if (isDepletion) {
@@ -4814,66 +4960,83 @@ const webUIHTML = `<!DOCTYPE html>
 
             // Use the actual mortgage payoff year from the strategy result
             const mortgagePayoffYear = r.mortgage_paid_off_year || 0;
+            const p1Name = document.getElementById('p1-name').value || 'Person1';
+            const p2Name = document.getElementById('p2-name').value || 'Person2';
             const p1Birth = document.getElementById('p1-birth').value;
             const p2Birth = document.getElementById('p2-birth').value;
-            const p1Retire = parseInt(document.getElementById('p1-retire').value) || 0;
-            const p2Retire = parseInt(document.getElementById('p2-retire').value) || 0;
+            const p1StopWork = document.getElementById('p1-retire').value; // Date string YYYY-MM-DD
+            const p2StopWork = document.getElementById('p2-retire').value;
             const p1SPA = parseInt(document.getElementById('p1-spa').value) || 0;
             const p2SPA = parseInt(document.getElementById('p2-spa').value) || 0;
             const p1DBAge = parseInt(document.getElementById('p1-db-age').value) || 0;
             const p2DBAge = parseInt(document.getElementById('p2-db-age').value) || 0;
+            const p1Pension = parseFloat(document.getElementById('p1-pension').value) || 0;
+            const p2Pension = parseFloat(document.getElementById('p2-pension').value) || 0;
+            const p1PensionAccess = parseInt(document.getElementById('p1-pension-age').value) || 0;
+            const p2PensionAccess = parseInt(document.getElementById('p2-pension-age').value) || 0;
 
             function yearFromAge(birthDate, age) {
                 if (!birthDate || !age) return 0;
                 return parseInt(birthDate.split('-')[0]) + age;
             }
+            function taxYearFromDate(dateStr) {
+                if (!dateStr) return 0;
+                const parts = dateStr.split('-');
+                if (parts.length < 3) return parseInt(dateStr) || 0;
+                const year = parseInt(parts[0]);
+                const month = parseInt(parts[1]);
+                const day = parseInt(parts[2]);
+                // Tax year runs April 6 to April 5
+                if (month < 4 || (month === 4 && day < 6)) return year - 1;
+                return year;
+            }
 
-            // Find pension and ISA depletion years
-            let pensionDepletedYear = 0;
-            let isaDepletedYear = 0;
-            let prevPensionTotal = -1;
-            let prevISATotal = -1;
+            // Find pension and ISA depletion years per person
+            let pensionDepletedByPerson = {};
+            let isaDepletedByPerson = {};
+            let prevBalances = {};
             r.years.forEach(y => {
                 if (y.balances) {
-                    let pensionTotal = 0;
-                    let isaTotal = 0;
-                    Object.values(y.balances).forEach(bal => {
-                        pensionTotal += (bal.uncrystallised_pot || 0) + (bal.crystallised_pot || 0);
-                        isaTotal += bal.isa || 0;
+                    Object.keys(y.balances).forEach(name => {
+                        const bal = y.balances[name];
+                        const pensionTotal = (bal.uncrystallised_pot || 0) + (bal.crystallised_pot || 0);
+                        const isaTotal = bal.isa || 0;
+                        const prev = prevBalances[name] || { pension: -1, isa: -1 };
+
+                        // Detect pension depletion for this person
+                        if (prev.pension > 0 && pensionTotal <= 0 && !pensionDepletedByPerson[name]) {
+                            pensionDepletedByPerson[name] = y.year;
+                        }
+                        // Detect ISA depletion for this person
+                        if (prev.isa > 0 && isaTotal <= 0 && !isaDepletedByPerson[name]) {
+                            isaDepletedByPerson[name] = y.year;
+                        }
+                        prevBalances[name] = { pension: pensionTotal, isa: isaTotal };
                     });
-                    // Detect pension depletion (was > 0, now 0)
-                    if (prevPensionTotal > 0 && pensionTotal <= 0 && !pensionDepletedYear) {
-                        pensionDepletedYear = y.year;
-                    }
-                    // Detect ISA depletion (was > 0, now 0)
-                    if (prevISATotal > 0 && isaTotal <= 0 && !isaDepletedYear) {
-                        isaDepletedYear = y.year;
-                    }
-                    prevPensionTotal = pensionTotal;
-                    prevISATotal = isaTotal;
                 }
             });
 
             const milestones = {
                 mortgage: mortgagePayoffYear,
-                retire: [yearFromAge(p1Birth, p1Retire), yearFromAge(p2Birth, p2Retire)],
-                spa: [yearFromAge(p1Birth, p1SPA), yearFromAge(p2Birth, p2SPA)],
-                db: [yearFromAge(p1Birth, p1DBAge), yearFromAge(p2Birth, p2DBAge)],
-                pensionDepleted: pensionDepletedYear,
-                isaDepleted: isaDepletedYear
+                stopWork: { [p1Name]: taxYearFromDate(p1StopWork), [p2Name]: taxYearFromDate(p2StopWork) },
+                spa: { [p1Name]: yearFromAge(p1Birth, p1SPA), [p2Name]: yearFromAge(p2Birth, p2SPA) },
+                db: { [p1Name]: yearFromAge(p1Birth, p1DBAge), [p2Name]: yearFromAge(p2Birth, p2DBAge) },
+                pensionAccess: { [p1Name]: p1Pension > 0 ? yearFromAge(p1Birth, p1PensionAccess) : 0, [p2Name]: p2Pension > 0 ? yearFromAge(p2Birth, p2PensionAccess) : 0 },
+                pensionDepleted: pensionDepletedByPerson,
+                isaDepleted: isaDepletedByPerson
             };
 
             let html = '<div style="padding:0.5rem;">';
             html += '<div style="font-size:0.7rem;margin-bottom:0.5rem;display:flex;gap:1rem;flex-wrap:wrap;">';
             html += '<span style="background:#fff3cd;padding:2px 6px;border-radius:3px;">Mortgage</span>';
-            html += '<span style="background:#d1e7dd;padding:2px 6px;border-radius:3px;">Retirement</span>';
+            html += '<span style="background:#d1e7dd;padding:2px 6px;border-radius:3px;">Retires</span>';
             html += '<span style="background:#cfe2ff;padding:2px 6px;border-radius:3px;">State Pension</span>';
             html += '<span style="background:#e2d9f3;padding:2px 6px;border-radius:3px;"><abbr title="Defined Benefit Pension starts" style="text-decoration:none;">DB Pension</abbr></span>';
-            if (pensionDepletedYear) html += '<span style="background:#f8d7da;padding:2px 6px;border-radius:3px;">⚠ Pension Depleted</span>';
-            if (isaDepletedYear) html += '<span style="background:#ffe5d0;padding:2px 6px;border-radius:3px;"><abbr title="Individual Savings Account depleted" style="text-decoration:none;">ISA</abbr> Depleted</span>';
+            if (Object.keys(pensionDepletedByPerson).length > 0) html += '<span style="background:#f8d7da;padding:2px 6px;border-radius:3px;">⚠ Pension Depleted</span>';
+            if (Object.keys(isaDepletedByPerson).length > 0) html += '<span style="background:#ffe5d0;padding:2px 6px;border-radius:3px;"><abbr title="Individual Savings Account depleted" style="text-decoration:none;">ISA</abbr> Depleted</span>';
             html += '</div>';
             html += '<table class="detail-table"><thead><tr>';
-            html += '<th>Year</th><th>Age</th><th>Event</th><th>Required</th><th>Pensions</th><th>Tax</th><th>Net</th><th>Delta</th><th>Balance</th>';
+            html += '<th>Year</th><th>Age</th><th style="min-width:140px;text-align:left;">Events</th><th>Required</th><th>Pensions</th><th>Tax</th><th>Net</th><th>Delta</th><th>Balance</th>';
             html += '</tr></thead><tbody>';
 
             // Calculate colspan for detail rows
@@ -4882,22 +5045,35 @@ const webUIHTML = `<!DOCTYPE html>
             r.years.forEach((y, yi) => {
                 const ages = Object.values(y.ages || {}).join('/');
                 let rowClass = 'expandable-row';
-                let event = '';
+                let events = [];
 
-                // Check for warning events first (pension/ISA depleted)
-                if (y.year === milestones.pensionDepleted) { rowClass += ' highlight-pension-depleted'; event = '⚠ Pen Out'; }
-                else if (y.year === milestones.isaDepleted) { rowClass += ' highlight-isa-depleted'; event = 'ISA Out'; }
-                // Then check for milestone events
-                else if (y.year === milestones.mortgage) { rowClass += ' highlight-mortgage'; event = 'Mortgage'; }
-                else if (milestones.retire.includes(y.year)) { rowClass += ' highlight-retire'; event = 'Retire'; }
-                else if (milestones.spa.includes(y.year)) { rowClass += ' highlight-spa'; event = 'State Pen'; }
-                else if (milestones.db.includes(y.year)) { rowClass += ' highlight-db'; event = 'DB Pen'; }
+                // Check milestone events per person (multiple can occur same year)
+                Object.keys(milestones.pensionDepleted).forEach(name => {
+                    if (y.year === milestones.pensionDepleted[name]) { rowClass += ' highlight-pension-depleted'; events.push(name + ' pension depleted'); }
+                });
+                Object.keys(milestones.isaDepleted).forEach(name => {
+                    if (y.year === milestones.isaDepleted[name]) { rowClass += ' highlight-isa-depleted'; events.push(name + ' ISA depleted'); }
+                });
+                if (y.year === milestones.mortgage) { rowClass += ' highlight-mortgage'; events.push('Mortgage paid'); }
+                Object.keys(milestones.stopWork).forEach(name => {
+                    if (milestones.stopWork[name] && y.year === milestones.stopWork[name]) { rowClass += ' highlight-stop-work'; events.push(name + ' retires'); }
+                });
+                Object.keys(milestones.spa).forEach(name => {
+                    if (milestones.spa[name] && y.year === milestones.spa[name]) { rowClass += ' highlight-spa'; events.push(name + ' state pension'); }
+                });
+                Object.keys(milestones.db).forEach(name => {
+                    if (milestones.db[name] && y.year === milestones.db[name]) { rowClass += ' highlight-db'; events.push(name + ' DB pension'); }
+                });
+                Object.keys(milestones.pensionAccess).forEach(name => {
+                    if (milestones.pensionAccess[name] && y.year === milestones.pensionAccess[name]) { events.push(name + ' pension access'); }
+                });
 
                 // Main row (clickable to expand)
                 html += '<tr id="row-s' + idx + '-' + y.year + '" class="' + rowClass + '" onclick="toggleYearRow(\'s' + idx + '\', ' + y.year + ', event)">';
                 html += '<td>' + y.year + '</td>';
                 html += '<td>' + ages + '</td>';
-                html += '<td>' + event + '</td>';
+                const eventsHtml = events.length > 0 ? events.map(e => '<span class="event-tag">' + e + '</span>').join('<br>') : '-';
+                html += '<td style="text-align:left;">' + eventsHtml + '</td>';
                 html += '<td>' + formatMoney(y.required_income) + '</td>';
                 html += '<td>' + formatMoney((y.state_pension || 0) + (y.db_pension || 0)) + '</td>';
                 html += '<td><span class="tax-link" onclick="event.stopPropagation(); showTaxPopupFromYear(' + idx + ', ' + y.year + ')">' + formatMoney(y.tax_paid) + '</span></td>';
@@ -4967,8 +5143,8 @@ const webUIHTML = `<!DOCTYPE html>
             const mortgagePayoffYear = r.mortgage_paid_off_year || 0;
             const p1Birth = document.getElementById('p1-birth').value;
             const p2Birth = document.getElementById('p2-birth').value;
-            const p1Retire = parseInt(document.getElementById('p1-retire').value) || 0;
-            const p2Retire = parseInt(document.getElementById('p2-retire').value) || 0;
+            const p1StopWork = document.getElementById('p1-retire').value; // Date string YYYY-MM-DD
+            const p2StopWork = document.getElementById('p2-retire').value;
             const p1SPA = parseInt(document.getElementById('p1-spa').value) || 0;
             const p2SPA = parseInt(document.getElementById('p2-spa').value) || 0;
             const p1DBAge = parseInt(document.getElementById('p1-db-age').value) || 0;
@@ -4979,6 +5155,17 @@ const webUIHTML = `<!DOCTYPE html>
                 if (!birthDate || !age) return 0;
                 const year = parseInt(birthDate.split('-')[0]);
                 return year + age;
+            }
+            function taxYearFromDate(dateStr) {
+                if (!dateStr) return 0;
+                const parts = dateStr.split('-');
+                if (parts.length < 3) return parseInt(dateStr) || 0;
+                const year = parseInt(parts[0]);
+                const month = parseInt(parts[1]);
+                const day = parseInt(parts[2]);
+                // Tax year runs April 6 to April 5
+                if (month < 4 || (month === 4 && day < 6)) return year - 1;
+                return year;
             }
 
             // Find pension and ISA depletion years
@@ -5007,7 +5194,7 @@ const webUIHTML = `<!DOCTYPE html>
 
             const milestones = {
                 mortgage: mortgagePayoffYear,
-                retire: [yearFromAge(p1Birth, p1Retire), yearFromAge(p2Birth, p2Retire)],
+                stopWork: [taxYearFromDate(p1StopWork), taxYearFromDate(p2StopWork)],
                 spa: [yearFromAge(p1Birth, p1SPA), yearFromAge(p2Birth, p2SPA)],
                 db: [yearFromAge(p1Birth, p1DBAge), yearFromAge(p2Birth, p2DBAge)],
                 pensionDepleted: pensionDepletedYear,
@@ -5020,7 +5207,7 @@ const webUIHTML = `<!DOCTYPE html>
             // Legend for highlights
             html += '<div style="font-size:0.7rem;margin-bottom:0.5rem;display:flex;gap:1rem;flex-wrap:wrap;">';
             html += '<span><span style="background:#fff3cd;padding:2px 6px;border-radius:3px;">Mortgage Payoff</span></span>';
-            html += '<span><span style="background:#d1e7dd;padding:2px 6px;border-radius:3px;">Retirement</span></span>';
+            html += '<span><span style="background:#d1e7dd;padding:2px 6px;border-radius:3px;">Stop Work</span></span>';
             html += '<span><span style="background:#cfe2ff;padding:2px 6px;border-radius:3px;">State Pension</span></span>';
             html += '<span><span style="background:#e2d9f3;padding:2px 6px;border-radius:3px;"><abbr title="Defined Benefit Pension starts" style="text-decoration:none;">DB Pension</abbr></span></span>';
             if (pensionDepletedYear) html += '<span><span style="background:#f8d7da;padding:2px 6px;border-radius:3px;">⚠ Pension Depleted</span></span>';
@@ -5036,36 +5223,21 @@ const webUIHTML = `<!DOCTYPE html>
             r.years.forEach(y => {
                 const ages = Object.values(y.ages || {}).join('/');
                 let rowClass = 'expandable-row';
-                let event = '';
+                let events = [];
 
-                // Check for warning events first (pension/ISA depleted)
-                if (y.year === milestones.pensionDepleted) {
-                    rowClass += ' highlight-pension-depleted';
-                    event = '⚠ Pension Depleted';
-                } else if (y.year === milestones.isaDepleted) {
-                    rowClass += ' highlight-isa-depleted';
-                    event = 'ISA Depleted';
-                }
-                // Then check for milestone events
-                else if (y.year === milestones.mortgage) {
-                    rowClass += ' highlight-mortgage';
-                    event = 'Mortgage Paid';
-                } else if (milestones.retire.includes(y.year)) {
-                    rowClass += ' highlight-retire';
-                    event = 'Retirement';
-                } else if (milestones.spa.includes(y.year)) {
-                    rowClass += ' highlight-spa';
-                    event = 'State Pension';
-                } else if (milestones.db.includes(y.year)) {
-                    rowClass += ' highlight-db';
-                    event = 'DB Pension';
-                }
+                // Check all milestone events (multiple can occur same year)
+                if (y.year === milestones.pensionDepleted) { rowClass += ' highlight-pension-depleted'; events.push('⚠ Pension Depleted'); }
+                if (y.year === milestones.isaDepleted) { rowClass += ' highlight-isa-depleted'; events.push('ISA Depleted'); }
+                if (y.year === milestones.mortgage) { rowClass += ' highlight-mortgage'; events.push('Mortgage Paid'); }
+                if (milestones.stopWork.includes(y.year)) { rowClass += ' highlight-stop-work'; events.push('Stop Work'); }
+                if (milestones.spa.includes(y.year)) { rowClass += ' highlight-spa'; events.push('State Pension'); }
+                if (milestones.db.includes(y.year)) { rowClass += ' highlight-db'; events.push('DB Pension'); }
 
                 // Main row (clickable to expand)
                 html += '<tr id="row-d' + idx + '-' + y.year + '" class="' + rowClass + '" onclick="toggleYearRow(\'d' + idx + '\', ' + y.year + ', event)">';
                 html += '<td>' + y.year + '</td>';
                 html += '<td>' + ages + '</td>';
-                html += '<td>' + event + '</td>';
+                html += '<td>' + events.join(', ') + '</td>';
                 html += '<td>' + formatMoney(y.required_income) + '</td>';
                 html += '<td>' + formatMoney((y.state_pension || 0) + (y.db_pension || 0)) + '</td>';
                 html += '<td><span class="tax-link" onclick="event.stopPropagation(); showTaxPopupFromYear(' + idx + ', ' + y.year + ')">' + formatMoney(y.tax_paid) + '</span></td>';
@@ -5147,6 +5319,7 @@ const webUIHTML = `<!DOCTYPE html>
                     document.getElementById('p1-db-amount').value = p1.db_pension_amount || 0;
                     document.getElementById('p1-db-age').value = p1.db_pension_start_age || 67;
                     document.getElementById('p1-isa-limit').value = p1.isa_annual_limit || 20000;
+                    document.getElementById('p1-work-income').value = p1.work_income || 0;
 
                     if (config.people.length > 1) {
                         const p2 = config.people[1];
@@ -5170,6 +5343,7 @@ const webUIHTML = `<!DOCTYPE html>
                         document.getElementById('p2-db-amount').value = p2.db_pension_amount || 0;
                         document.getElementById('p2-db-age').value = p2.db_pension_start_age || 67;
                         document.getElementById('p2-isa-limit').value = p2.isa_annual_limit || 20000;
+                        document.getElementById('p2-work-income').value = p2.work_income || 0;
                     }
 
                     // Update reference person dropdowns
@@ -5288,6 +5462,13 @@ const webUIHTML = `<!DOCTYPE html>
                     if (config.mortgage.early_payoff_year) {
                         document.getElementById('mortgage-early').value = config.mortgage.early_payoff_year;
                     }
+                    // Load extension settings
+                    const allowExtension = config.mortgage.allow_extension || false;
+                    document.getElementById('mortgage-allow-extension').checked = allowExtension;
+                    if (config.mortgage.extended_end_year) {
+                        document.getElementById('mortgage-extended-year').value = config.mortgage.extended_end_year;
+                    }
+                    updateExtensionFields();
                 } else {
                     // Add a default empty mortgage part
                     addMortgagePart();
@@ -5297,6 +5478,10 @@ const webUIHTML = `<!DOCTYPE html>
                 // Add a default mortgage part even if config fails
                 addMortgagePart();
             }
+            // Format money inputs after loading values
+            initMoneyInputs();
+            // Set up mode-specific UI state
+            updateModeFields();
             // Run initial simulation after config loaded
             runSimulation();
         }
@@ -5442,29 +5627,35 @@ const webUIHTML = `<!DOCTYPE html>
             }
             csv += '\n';
 
-            // Sort results based on optimization goal
-            const optimizationGoal = document.getElementById('optimization-goal').value;
+            // Sort results - server already returns them ranked, but we re-sort for consistency
             const sortedForExport = [...lastResults.results].sort((a, b) => {
                 if (isDepletionMode) {
                     // Depletion modes: highest monthly income first
                     return (b.monthly_income || 0) - (a.monthly_income || 0);
                 } else {
-                    // Fixed mode: sort by optimization goal
-                    switch (optimizationGoal) {
-                        case 'income':
-                            // Higher total income is better
-                            return (b.total_income || 0) - (a.total_income || 0);
-                        case 'balance':
-                            // Higher final balance is better
-                            return (b.final_balance || 0) - (a.final_balance || 0);
-                        default: // 'tax'
-                            // Lower tax is better
-                            return (a.total_tax_paid || 0) - (b.total_tax_paid || 0);
+                    // Fixed mode: doesn't run out > highest balance > lowest tax
+                    // For strategies that run out: longest duration wins
+                    const aRanOut = a.ran_out_of_money || false;
+                    const bRanOut = b.ran_out_of_money || false;
+
+                    // Non-running-out strategies always beat running-out ones
+                    if (aRanOut !== bRanOut) {
+                        return aRanOut ? 1 : -1; // non-running-out comes first
                     }
+
+                    if (aRanOut && bRanOut) {
+                        // Both run out: longer duration wins
+                        return (b.ran_out_year || 0) - (a.ran_out_year || 0);
+                    }
+
+                    // Neither runs out: highest balance wins, lowest tax as tiebreaker
+                    const balanceDiff = (b.final_balance || 0) - (a.final_balance || 0);
+                    if (Math.abs(balanceDiff) > 1) return balanceDiff;
+                    return (a.total_tax_paid || 0) - (b.total_tax_paid || 0);
                 }
             });
 
-            // Add best strategy header - use server's best if available (respects optimization goal)
+            // Add best strategy header - use server's best (properly ranked)
             const serverBest = lastResults.best;
             if (serverBest || sortedForExport.length > 0) {
                 const best = serverBest || sortedForExport[0];
@@ -5473,17 +5664,8 @@ const webUIHTML = `<!DOCTYPE html>
                 if (isDepletionMode && best.monthly_income) {
                     csv += 'Max Monthly Income,' + formatMoneyCSV(best.monthly_income) + '\n';
                 } else {
-                    // Show metric based on optimization goal
-                    switch (optimizationGoal) {
-                        case 'income':
-                            csv += 'Total Income,' + formatMoneyCSV(best.total_income || 0) + '\n';
-                            break;
-                        case 'balance':
-                            csv += 'Final Balance,' + formatMoneyCSV(best.final_balance || 0) + '\n';
-                            break;
-                        default: // 'tax'
-                            csv += 'Lowest Tax,' + formatMoneyCSV(best.total_tax_paid) + '\n';
-                    }
+                    // Fixed mode: show balance and tax
+                    csv += 'Total Income,' + formatMoneyCSV(best.total_income || 0) + '\n';
                 }
             }
             csv += '\n';
@@ -5562,6 +5744,12 @@ const webUIHTML = `<!DOCTYPE html>
                 console.log('downloadStrategyCSV: response', data);
                 if (data.success) {
                     showExportNotification(data.file_path);
+                    // Open the file with the default application
+                    fetch('/api/open-file', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ file_path: data.file_path })
+                    }).catch(err => console.log('Could not open file:', err));
                 } else {
                     alert('Export failed: ' + data.message);
                 }
@@ -5623,6 +5811,24 @@ const webUIHTML = `<!DOCTYPE html>
             })
             .catch(err => {
                 alert('Could not open folder: ' + err.message);
+            });
+        }
+
+        function openPDFFile() {
+            if (!lastExportPath) return;
+            fetch('/api/open-file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_path: lastExportPath })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (!data.success) {
+                    alert('Could not open file: ' + data.message);
+                }
+            })
+            .catch(err => {
+                alert('Could not open file: ' + err.message);
             });
         }
 
@@ -5707,8 +5913,9 @@ const webUIHTML = `<!DOCTYPE html>
                 '</div>' +
                 '<button onclick="this.parentElement.parentElement.remove()" style="background:none;border:none;color:white;font-size:18px;cursor:pointer;padding:0;line-height:1;">&times;</button>' +
                 '</div>' +
-                '<div style="margin-top:12px;display:flex;gap:8px;">' +
-                '<button onclick="openExportFolder()" style="background:white;color:#1e40af;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:500;">Open Folder</button>' +
+                '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">' +
+                '<button onclick="openPDFFile()" style="background:white;color:#1e40af;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:500;">Open</button>' +
+                '<button onclick="openExportFolder()" style="background:rgba(255,255,255,0.2);color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;font-weight:500;">Open Folder</button>' +
                 '<button onclick="this.parentElement.parentElement.remove()" style="background:transparent;color:white;border:1px solid rgba(255,255,255,0.5);padding:8px 16px;border-radius:4px;cursor:pointer;">Dismiss</button>' +
                 '</div>';
             document.body.appendChild(notification);
@@ -5737,6 +5944,8 @@ const webUIHTML = `<!DOCTYPE html>
         }
 
         loadConfig();
+        // Initialize money formatting after a short delay to allow loadConfig to populate values
+        setTimeout(initMoneyInputs, 100);
     </script>
 </body>
 </html>
