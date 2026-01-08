@@ -1086,9 +1086,9 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	}
 
 	// Calculate monthly amounts
-	// Net Needed = the required income that must come from withdrawals (excluding work income)
-	// This is what must be funded from ISA/pension each month
-	monthlyNetRequired := yearState.NetRequired / 12
+	// Gross required per month is the base requirement (income + mortgage) before work income
+	grossRequired := yearState.RequiredIncome + yearState.MortgageCost
+	monthlyGrossRequired := grossRequired / 12
 
 	// Calculate total ISA withdrawals for this year
 	totalISAWithdrawal := 0.0
@@ -1136,46 +1136,12 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 	}
 
 	// Calculate monthly breakdown based on pension access timing
-	// The key insight: in pre-pension months, ALL income must come from ISA
-	// In pension months, pension provides income and ISA supplements
-	var monthlyISAPrePension, monthlyISAPensionPeriod float64
 	var monthlyPensionTaxFree, monthlyPensionTaxable float64
 
-	prePensionMonthCount := 12 - pensionMonths
-
-	if pensionMonths > 0 && prePensionMonthCount > 0 {
-		// Mixed year: some months without pension, some with
-		// Pre-pension months: need to cover full monthly need from ISA/savings
-		// The simulation assumed pension available all year, so we need to show
-		// what actually needs to happen month by month
-
+	if pensionMonths > 0 {
 		// Pension withdrawals concentrated in pension months only
 		monthlyPensionTaxFree = totalPensionTaxFree / float64(pensionMonths)
 		monthlyPensionTaxable = totalPensionTaxable / float64(pensionMonths)
-
-		// For pre-pension months, ISA/savings must cover the withdrawal need
-		// This is the net required (after work income is accounted for)
-		monthlyISAPrePension = monthlyNetRequired
-
-		// During pension months, if there are ISA withdrawals in the simulation,
-		// spread them over those months
-		if totalISAWithdrawal > 0 {
-			monthlyISAPensionPeriod = totalISAWithdrawal / float64(pensionMonths)
-		} else {
-			monthlyISAPensionPeriod = 0
-		}
-	} else if pensionMonths > 0 {
-		// Full year of pension access
-		monthlyPensionTaxFree = totalPensionTaxFree / 12
-		monthlyPensionTaxable = totalPensionTaxable / 12
-		monthlyISAPrePension = totalISAWithdrawal / 12
-		monthlyISAPensionPeriod = totalISAWithdrawal / 12
-	} else {
-		// No pension access this year - all from ISA
-		monthlyPensionTaxFree = 0
-		monthlyPensionTaxable = 0
-		monthlyISAPrePension = totalISAWithdrawal / 12
-		monthlyISAPensionPeriod = totalISAWithdrawal / 12
 	}
 
 	// Calculate work income per month based on retirement dates
@@ -1301,26 +1267,6 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 			}
 		}
 
-		// ISA deposit handling - spread across year or lump sum
-		monthlyISADeposit := 0.0
-		if totalISADeposit > 0 && isPensionAccessible {
-			// For pension-to-ISA, deposits only happen when pension is accessible
-			monthlyISADeposit = totalISADeposit / float64(pensionMonths)
-		}
-
-		// Determine amounts for this month based on pension accessibility
-		var thisMonthISA, thisMonthPensionTaxFree, thisMonthPensionTaxable float64
-
-		if isPensionAccessible {
-			thisMonthISA = monthlyISAPensionPeriod
-			thisMonthPensionTaxFree = monthlyPensionTaxFree
-			thisMonthPensionTaxable = monthlyPensionTaxable
-		} else {
-			thisMonthISA = monthlyISAPrePension
-			thisMonthPensionTaxFree = 0
-			thisMonthPensionTaxable = 0
-		}
-
 		// Calculate work income for this month
 		// Sum up work income from all people who are still working in this month
 		thisMonthWorkIncome := 0.0
@@ -1330,9 +1276,43 @@ func (r *PDFActionPlanReport) drawMonthlySchedule(plan YearActionPlan, yearState
 			}
 		}
 
+		// Calculate net needed from withdrawals for this specific month
+		// Net needed = gross required - work income for this month
+		thisMonthNetNeeded := monthlyGrossRequired - thisMonthWorkIncome
+		if thisMonthNetNeeded < 0 {
+			thisMonthNetNeeded = 0 // Work income exceeds requirement
+		}
+
+		// ISA deposit handling - spread across pension-accessible months
+		monthlyISADeposit := 0.0
+		if totalISADeposit > 0 && isPensionAccessible {
+			// For pension-to-ISA, deposits only happen when pension is accessible
+			monthlyISADeposit = totalISADeposit / float64(pensionMonths)
+		}
+
+		// Determine withdrawal amounts for this month based on pension accessibility and need
+		var thisMonthISA, thisMonthPensionTaxFree, thisMonthPensionTaxable float64
+
+		if thisMonthNetNeeded > 0 {
+			if isPensionAccessible {
+				// Pension is accessible - use pension for withdrawals
+				thisMonthPensionTaxFree = monthlyPensionTaxFree
+				thisMonthPensionTaxable = monthlyPensionTaxable
+				// ISA supplements if simulation used ISA
+				if totalISAWithdrawal > 0 && pensionMonths > 0 {
+					thisMonthISA = totalISAWithdrawal / float64(pensionMonths)
+				}
+			} else {
+				// Pre-pension: must use ISA/savings to cover the gap
+				thisMonthISA = thisMonthNetNeeded
+				thisMonthPensionTaxFree = 0
+				thisMonthPensionTaxable = 0
+			}
+		}
+
 		// Draw row
 		r.pdf.CellFormat(colWidths[0], 4, monthLabel, "1", 0, "L", true, 0, "")
-		r.pdf.CellFormat(colWidths[1], 4, formatMonthlyMoney(monthlyNetRequired), "1", 0, "R", true, 0, "")
+		r.pdf.CellFormat(colWidths[1], 4, formatMonthlyMoney(thisMonthNetNeeded), "1", 0, "R", true, 0, "")
 		r.pdf.CellFormat(colWidths[2], 4, formatMonthlyMoney(thisMonthWorkIncome), "1", 0, "R", true, 0, "")
 		r.pdf.CellFormat(colWidths[3], 4, formatMonthlyMoney(thisMonthISA), "1", 0, "R", true, 0, "")
 		r.pdf.CellFormat(colWidths[4], 4, formatMonthlyMoney(thisMonthPensionTaxFree), "1", 0, "R", true, 0, "")

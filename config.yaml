@@ -114,9 +114,22 @@ financial:
     depletion_growth_decline_enabled: false
     depletion_growth_decline_percent: 0.03
 income_requirements:
-    target_depletion_age: 90
-    income_ratio_phase1: 5
-    income_ratio_phase2: 3
+    tiers:
+        - end_age: 65
+          monthly_amount: 6
+          ratio: 0
+          is_percentage: true
+        - start_age: 65
+          end_age: 75
+          monthly_amount: 4.5
+          ratio: 0
+          is_percentage: true
+        - start_age: 75
+          monthly_amount: 4
+          ratio: 0
+    target_depletion_age: 0
+    income_ratio_phase1: 0
+    income_ratio_phase2: 0
     guardrails_enabled: false
     guardrails_upper_limit: 1.2
     guardrails_lower_limit: 0.8
