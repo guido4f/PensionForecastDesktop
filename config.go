@@ -46,7 +46,8 @@ type PersonConfig struct {
 	PartTimeEndAge   int     `yaml:"part_time_end_age" json:"part_time_end_age"`     // Age when part-time work ends
 
 	// Pre-retirement work income (salary while still employed)
-	WorkIncome float64 `yaml:"work_income" json:"work_income"` // Annual salary while employed (used before retirement_date)
+	WorkIncome    float64 `yaml:"work_income" json:"work_income"`         // Annual gross salary while employed (legacy, not used if WorkIncomeNet set)
+	WorkIncomeNet float64 `yaml:"work_income_net" json:"work_income_net"` // Monthly take-home pay after tax and NI (preferred)
 
 	// ISA to SIPP Transfer Strategy (pre-retirement optimization)
 	// While working, transfer ISA funds to pension to get tax relief, then withdraw later

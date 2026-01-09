@@ -3020,9 +3020,9 @@ const webUIHTML = `<!DOCTYPE html>
                             </div>
                             <div class="form-row-4">
                                 <div class="form-group">
-                                    <label>Work Income</label>
-                                    <input type="text" id="p1-work-income" class="money-input" value="0">
-                                    <div class="form-hint">Salary (gross)</div>
+                                    <label>Take-Home Pay</label>
+                                    <input type="text" id="p1-work-income-net" class="money-input" value="0">
+                                    <div class="form-hint">Monthly net</div>
                                 </div>
                             </div>
                             <details class="advanced-options">
@@ -3144,9 +3144,9 @@ const webUIHTML = `<!DOCTYPE html>
                             </div>
                             <div class="form-row-4">
                                 <div class="form-group">
-                                    <label>Work Income</label>
-                                    <input type="text" id="p2-work-income" class="money-input" value="0">
-                                    <div class="form-hint">Salary (gross)</div>
+                                    <label>Take-Home Pay</label>
+                                    <input type="text" id="p2-work-income-net" class="money-input" value="0">
+                                    <div class="form-hint">Monthly net</div>
                                 </div>
                             </div>
                             <details class="advanced-options">
@@ -4383,7 +4383,7 @@ const webUIHTML = `<!DOCTYPE html>
                     db_pension_amount: parseMoney(document.getElementById('p1-db-amount').value),
                     db_pension_start_age: parseInt(document.getElementById('p1-db-age').value) || 0,
                     isa_annual_limit: parseMoney(document.getElementById('p1-isa-limit').value),
-                    work_income: parseMoney(document.getElementById('p1-work-income').value),
+                    work_income_net: parseMoney(document.getElementById('p1-work-income-net').value),
                     // Advanced options
                     state_pension_defer_years: parseInt(document.getElementById('p1-sp-defer').value) || 0,
                     db_pension_normal_age: parseInt(document.getElementById('p1-db-normal-age').value) || 65,
@@ -4407,7 +4407,7 @@ const webUIHTML = `<!DOCTYPE html>
                     db_pension_amount: parseMoney(document.getElementById('p2-db-amount').value),
                     db_pension_start_age: parseInt(document.getElementById('p2-db-age').value) || 0,
                     isa_annual_limit: parseMoney(document.getElementById('p2-isa-limit').value),
-                    work_income: parseMoney(document.getElementById('p2-work-income').value),
+                    work_income_net: parseMoney(document.getElementById('p2-work-income-net').value),
                     // Advanced options
                     state_pension_defer_years: parseInt(document.getElementById('p2-sp-defer').value) || 0,
                     db_pension_normal_age: parseInt(document.getElementById('p2-db-normal-age').value) || 65,
@@ -5319,7 +5319,7 @@ const webUIHTML = `<!DOCTYPE html>
                     document.getElementById('p1-db-amount').value = p1.db_pension_amount || 0;
                     document.getElementById('p1-db-age').value = p1.db_pension_start_age || 67;
                     document.getElementById('p1-isa-limit').value = p1.isa_annual_limit || 20000;
-                    document.getElementById('p1-work-income').value = p1.work_income || 0;
+                    document.getElementById('p1-work-income-net').value = p1.work_income_net || 0;
 
                     if (config.people.length > 1) {
                         const p2 = config.people[1];
@@ -5343,7 +5343,7 @@ const webUIHTML = `<!DOCTYPE html>
                         document.getElementById('p2-db-amount').value = p2.db_pension_amount || 0;
                         document.getElementById('p2-db-age').value = p2.db_pension_start_age || 67;
                         document.getElementById('p2-isa-limit').value = p2.isa_annual_limit || 20000;
-                        document.getElementById('p2-work-income').value = p2.work_income || 0;
+                        document.getElementById('p2-work-income-net').value = p2.work_income_net || 0;
                     }
 
                     // Update reference person dropdowns

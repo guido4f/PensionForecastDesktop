@@ -63,7 +63,7 @@ people:
       part_time_income: 0
       part_time_start_age: 55
       part_time_end_age: 60
-      work_income: 110000
+      work_income_net: 6240
       isa_to_sipp_enabled: false
       pension_annual_allowance: 0
       employer_contribution: 0
@@ -90,14 +90,14 @@ people:
       part_time_income: 0
       part_time_start_age: 55
       part_time_end_age: 60
-      work_income: 33000
+      work_income_net: 2205
       isa_to_sipp_enabled: false
       pension_annual_allowance: 0
       employer_contribution: 0
       isa_to_sipp_max_percent: 0
       isa_to_sipp_preserve_months: 0
 financial:
-    pension_growth_rate: 0.15
+    pension_growth_rate: 0.13
     savings_growth_rate: 0.15
     income_inflation_rate: 0.03
     state_pension_amount: 11500
@@ -114,7 +114,7 @@ financial:
     depletion_growth_decline_enabled: false
     depletion_growth_decline_percent: 0.03
 income_requirements:
-    target_depletion_age: 90
+    target_depletion_age: 92
     income_ratio_phase1: 5
     income_ratio_phase2: 3
     guardrails_enabled: false
@@ -133,8 +133,8 @@ mortgage:
           start_year: 2006
     end_year: 2031
     early_payoff_year: 2028
-    allow_extension: false
-    extended_end_year: 0
+    allow_extension: true
+    extended_end_year: 2041
 simulation:
     start_year: 2026
     end_age: 95

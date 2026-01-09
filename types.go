@@ -482,7 +482,8 @@ type Person struct {
 	PartTimeEndAge    int     // Age when part-time work ends
 
 	// Pre-retirement work income
-	WorkIncome float64 // Annual salary while still employed (before RetirementDate)
+	WorkIncome    float64 // Annual gross salary while still employed (legacy, not used if WorkIncomeNet set)
+	WorkIncomeNet float64 // Monthly take-home pay after tax and NI (preferred)
 
 	// ISA to SIPP Transfer Configuration
 	ISAToSIPPEnabled        bool    // Enable ISA to SIPP transfers while working
@@ -529,7 +530,8 @@ func (p *Person) Clone() *Person {
 		PartTimeStartAge: p.PartTimeStartAge,
 		PartTimeEndAge:   p.PartTimeEndAge,
 		// Pre-retirement work income
-		WorkIncome: p.WorkIncome,
+		WorkIncome:    p.WorkIncome,
+		WorkIncomeNet: p.WorkIncomeNet,
 		// ISA to SIPP Transfer
 		ISAToSIPPEnabled:        p.ISAToSIPPEnabled,
 		PensionAnnualAllowance:  p.PensionAnnualAllowance,
@@ -729,7 +731,7 @@ func (p *Person) IsReceivingPartTimeIncome(year int) bool {
 // IsWorking returns true if the person is still employed (before retirement date/age)
 // year is the tax year start (e.g., 2026 for tax year 2026/27)
 func (p *Person) IsWorking(year int) bool {
-	if p.WorkIncome <= 0 {
+	if p.WorkIncome <= 0 && p.WorkIncomeNet <= 0 {
 		return false
 	}
 	// Use RetirementTaxYear if set (calculated from RetirementDate or RetirementAge)
@@ -744,6 +746,16 @@ func (p *Person) IsWorking(year int) bool {
 		age = year - p.BirthYear
 	}
 	return age < p.RetirementAge
+}
+
+// GetAnnualWorkIncome returns the effective annual work income
+// Prefers WorkIncomeNet * 12 (take-home) if set, otherwise falls back to WorkIncome (gross)
+// Note: When using WorkIncomeNet, the returned value is already net of tax/NI
+func (p *Person) GetAnnualWorkIncome() float64 {
+	if p.WorkIncomeNet > 0 {
+		return p.WorkIncomeNet * 12 // Convert monthly to annual
+	}
+	return p.WorkIncome // Legacy: gross annual salary
 }
 
 // PersonBalances holds end-of-year balances for a person

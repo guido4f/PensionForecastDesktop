@@ -90,7 +90,7 @@ people:
     tax_free_savings: 100000.00    # ISA/savings balance (£)
     pension: 500000.00             # Pension pot value (£)
     isa_annual_limit: 20000.00     # Max annual ISA contribution (£)
-    work_income: 0                 # Annual salary while employed (before retirement_date)
+    work_income_net: 0             # Monthly take-home pay after tax and NI (£)
     # Note: If retirement_date is in July 2026, income requirements start in tax year 2026/27
     # If you retire in February 2026, that's tax year 2025/26
 
@@ -102,7 +102,7 @@ people:
     tax_free_savings: 100000.00
     pension: 500000.00
     isa_annual_limit: 20000.00     # Max annual ISA contribution (£)
-    work_income: 0                 # Annual salary while employed (before retirement_date)
+    work_income_net: 0             # Monthly take-home pay after tax and NI (£)
     # Optional: Defined Benefit pension (e.g., Teachers, NHS, Civil Service)
     db_pension_amount: 400.00     # Annual DB pension amount (£)
     db_pension_start_age: 57       # Age when DB pension starts

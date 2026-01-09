@@ -72,7 +72,8 @@ func InitializePeople(config *Config) []*Person {
 			PartTimeStartAge: pc.PartTimeStartAge,
 			PartTimeEndAge:   pc.PartTimeEndAge,
 			// Pre-retirement work income
-			WorkIncome: pc.WorkIncome,
+			WorkIncome:    pc.WorkIncome,
+			WorkIncomeNet: pc.WorkIncomeNet,
 			// ISA to SIPP Transfer
 			ISAToSIPPEnabled:        pc.ISAToSIPPEnabled,
 			PensionAnnualAllowance:  pensionAnnualAllowance,
@@ -468,11 +469,12 @@ func RunSimulation(params SimulationParams, config *Config) SimulationResult {
 		}
 
 		// Calculate work income (pre-retirement employment)
+		// Uses WorkIncomeNet (monthly take-home * 12) if set, otherwise WorkIncome (gross)
 		for _, p := range people {
 			if p.IsWorking(year) {
 				// Apply inflation to work income (salary increases)
 				workInflation := math.Pow(1+config.Financial.IncomeInflationRate, float64(yearsFromStart))
-				inflatedWorkIncome := p.WorkIncome * workInflation
+				inflatedWorkIncome := p.GetAnnualWorkIncome() * workInflation
 				state.WorkIncomeByPerson[p.Name] = inflatedWorkIncome
 				state.TotalWorkIncome += inflatedWorkIncome
 			}
